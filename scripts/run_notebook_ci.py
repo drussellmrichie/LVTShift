@@ -25,6 +25,8 @@ def patch_data_scrape(nb: dict) -> tuple:
         for line in cell["source"]:
             new_line = re.sub(r"(\bdata_scrape\s*=\s*)0\b", r"\g<1>1", line)
             new_line = re.sub(r"(\bdata_scrape\s*=\s*)False\b", r"\g<1>True", new_line)
+            new_line = re.sub(r"(\bscrape_data\s*=\s*)0\b", r"\g<1>1", new_line)
+            new_line = re.sub(r"(\bscrape_data\s*=\s*)False\b", r"\g<1>True", new_line)
             if new_line != line:
                 patched = True
             new_source.append(new_line)
