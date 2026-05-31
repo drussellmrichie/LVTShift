@@ -2,6 +2,14 @@ name: Run City Notebooks
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'cities/*/model.ipynb'
+      - 'lvt/**'
+      - 'scripts/**'
+      - 'requirements.txt'
+      - '.github/workflows/city-notebooks.yml'
   schedule:
     - cron: '0 6 * * 1'  # Mondays 6 AM UTC
 
@@ -110,3 +118,24 @@ jobs:
           name: all-city-csvs
           path: csvs/
           if-no-files-found: warn
+
+      - name: Checkout repo to commit CSVs
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit CSVs to ci-analysis-data branch
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -B ci-analysis-data
+          mkdir -p analysis/data
+          cp csvs/*.csv analysis/data/ 2>/dev/null || echo "No CSVs to copy"
+          git add -f analysis/data/*.csv 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No CSV changes to commit"
+          else
+            git commit -m "ci: update city analysis CSVs [skip ci]"
+            git push -f origin ci-analysis-data
+          fi
