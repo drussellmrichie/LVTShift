@@ -1,0 +1,86 @@
+name: Run City Notebooks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'  # Mondays 6 AM UTC
+
+jobs:
+  run-city:
+    name: Run ${{ matrix.city }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        city:
+          - baltimore
+          - bellingham
+          - bryan
+          - charlottesville
+          - cincinnati
+          - cleveland
+          - college_station
+          - denver        # incomplete — export cell is a TODO
+          - fort_collins
+          - greeley
+          - highlands_ranch
+          - morgantown    # incomplete — modeling not yet done
+          - philadelphia
+          - pueblo
+          - rochester
+          - scranton      # incomplete — only data fetch implemented
+          - southbend
+          - spokane
+          - st_paul
+          - syracuse
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt jupyter nbconvert
+
+      - name: Write .env
+        run: echo "CENSUS_API_KEY=$CENSUS_API_KEY" > .env
+        env:
+          CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
+
+      - name: Run notebook
+        run: python scripts/run_notebook_ci.py ${{ matrix.city }}
+
+      - name: Upload CSV
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: city-csv-${{ matrix.city }}
+          path: analysis/data/${{ matrix.city }}.csv
+          if-no-files-found: warn
+
+  collect:
+    name: Collect all CSVs
+    needs: run-city
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all city CSVs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: city-csv-*
+          path: csvs
+          merge-multiple: true
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-city-csvs
+          path: csvs/
+          if-no-files-found: warn
