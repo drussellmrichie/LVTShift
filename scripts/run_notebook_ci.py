@@ -69,7 +69,8 @@ def main() -> int:
                 "jupyter", "nbconvert",
                 "--to", "notebook",
                 "--execute",
-                "--ExecutePreprocessor.timeout=14400",  # 4 hours
+                "--ExecutePreprocessor.timeout=14400",
+                "--ExecutePreprocessor.kernel_name=python3",
                 "--output", str(tmp_out_path),
                 str(tmp_in_path),
             ],
