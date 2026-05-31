@@ -61,9 +61,18 @@ jobs:
           CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
 
       - name: Run notebook
+        id: run_nb
         run: |
           set -o pipefail
           python scripts/run_notebook_ci.py ${{ matrix.city }} 2>&1 | tee /tmp/nb-${{ matrix.city }}.log
+
+      - name: Annotate error
+        if: failure() && steps.run_nb.outcome == 'failure'
+        run: |
+          msg=$(tail -60 /tmp/nb-${{ matrix.city }}.log \
+            | sed 's/\x1b\[[0-9;]*[mGKH]//g' \
+            | tr '\n' '|')
+          echo "::error title=${{ matrix.city }} notebook error::$msg"
 
       - name: Upload run log
         if: always()
