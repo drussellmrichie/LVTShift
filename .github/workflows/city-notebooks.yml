@@ -47,7 +47,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt jupyter nbconvert ipykernel
+          pip install -r requirements.txt jupyter nbconvert ipykernel pyarrow
           python -m ipykernel install --sys-prefix --name lvtshift --display-name "LVTShift"
 
       - name: Verify environment
