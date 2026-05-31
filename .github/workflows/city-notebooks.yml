@@ -46,7 +46,7 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt jupyter nbconvert
+        run: pip install -r requirements.txt jupyter nbconvert ipykernel
 
       - name: Write .env
         run: echo "CENSUS_API_KEY=$CENSUS_API_KEY" > .env
