@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt jupyter nbconvert ipykernel
-          python -m ipykernel install --user --name python3 --display-name "Python 3"
+          python -m ipykernel install --sys-prefix --name lvtshift --display-name "LVTShift"
 
       - name: Verify environment
         run: |
@@ -61,7 +61,17 @@ jobs:
           CENSUS_API_KEY: ${{ secrets.CENSUS_API_KEY }}
 
       - name: Run notebook
-        run: python scripts/run_notebook_ci.py ${{ matrix.city }}
+        run: |
+          set -o pipefail
+          python scripts/run_notebook_ci.py ${{ matrix.city }} 2>&1 | tee /tmp/nb-${{ matrix.city }}.log
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ matrix.city }}
+          path: /tmp/nb-${{ matrix.city }}.log
+          if-no-files-found: warn
 
       - name: Upload CSV
         if: always()

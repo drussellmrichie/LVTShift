@@ -69,7 +69,7 @@ def main() -> int:
         "--to", "notebook",
         "--execute",
         f"--ExecutePreprocessor.timeout=14400",
-        "--ExecutePreprocessor.kernel_name=python3",
+        "--ExecutePreprocessor.kernel_name=lvtshift",
         "--output", tmp_out_path.name,  # relative filename; cwd is nb_path.parent
         tmp_in_path.name,               # relative filename; cwd is nb_path.parent
     ]
