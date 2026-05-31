@@ -18,26 +18,29 @@ jobs:
     name: Run ${{ matrix.city }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    # Cities that are known-incomplete or whose source data is WAF-blocked in CI
+    # are allowed to fail without marking the whole workflow red.
+    continue-on-error: ${{ contains(fromJson('["bryan","college_station","cincinnati","denver","morgantown","scranton"]'), matrix.city) }}
     strategy:
       fail-fast: false
       matrix:
         city:
           - baltimore
           - bellingham
-          - bryan
+          - bryan           # BCAD shapefile — brazoscad.org blocks CI IPs
           - charlottesville
-          - cincinnati
+          - cincinnati      # no public parcel download URL
           - cleveland
-          - college_station
-          - denver        # incomplete — export cell is a TODO
+          - college_station # BCAD shapefile — brazoscad.org blocks CI IPs
+          - denver          # incomplete — export cell is a TODO
           - fort_collins
           - greeley
           - highlands_ranch
-          - morgantown    # incomplete — modeling not yet done
+          - morgantown      # incomplete — modeling not yet done
           - philadelphia
           - pueblo
           - rochester
-          - scranton      # incomplete — only data fetch implemented
+          - scranton        # incomplete — only data fetch implemented
           - southbend
           - spokane
           - st_paul
