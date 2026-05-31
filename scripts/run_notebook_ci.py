@@ -55,28 +55,35 @@ def main() -> int:
     # Use MPLBACKEND=Agg so matplotlib doesn't try to open a display
     env = {**os.environ, "MPLBACKEND": "Agg"}
 
-    with tempfile.NamedTemporaryFile(
-        suffix=".ipynb", mode="w", delete=False, dir=nb_path.parent
-    ) as tmp_in:
-        json.dump(nb, tmp_in)
-        tmp_in_path = Path(tmp_in.name)
+    # Write patched notebook as a temp file in the notebook's own directory
+    # so nbconvert's cwd-relative paths work correctly
+    pid = os.getpid()
+    tmp_in_path = nb_path.parent / f"_ci_input_{pid}.ipynb"
+    tmp_out_path = nb_path.parent / f"_ci_output_{pid}.ipynb"
 
-    tmp_out_path = Path(tempfile.mktemp(suffix="_executed.ipynb"))
+    with tmp_in_path.open("w") as f:
+        json.dump(nb, f)
+
+    cmd = [
+        sys.executable, "-m", "jupyter", "nbconvert",
+        "--to", "notebook",
+        "--execute",
+        f"--ExecutePreprocessor.timeout=14400",
+        "--ExecutePreprocessor.kernel_name=python3",
+        "--output", tmp_out_path.name,  # relative filename; cwd is nb_path.parent
+        tmp_in_path.name,               # relative filename; cwd is nb_path.parent
+    ]
+    print(f"[{city}] Running: {' '.join(cmd)}", flush=True)
+    print(f"[{city}] cwd: {nb_path.parent}", flush=True)
 
     try:
         result = subprocess.run(
-            [
-                "jupyter", "nbconvert",
-                "--to", "notebook",
-                "--execute",
-                "--ExecutePreprocessor.timeout=14400",
-                "--ExecutePreprocessor.kernel_name=python3",
-                "--output", str(tmp_out_path),
-                str(tmp_in_path),
-            ],
+            cmd,
             cwd=nb_path.parent,  # kernel runs from cities/<city>/ so relative paths resolve
             env=env,
         )
+        if result.returncode != 0:
+            print(f"[{city}] nbconvert exited with code {result.returncode}", file=sys.stderr)
         return result.returncode
     finally:
         tmp_in_path.unlink(missing_ok=True)
