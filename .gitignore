@@ -124,6 +124,7 @@ analysis/reports/
 *.xls
 *.parquet
 *.json
+!cities/candidates.json
 *.geojson
 *.shp
 *.shx
