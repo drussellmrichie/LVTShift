@@ -105,6 +105,17 @@ def headlines(base, refined, post) -> None:
     H.add("SfrWinRateBaseline", (sfr_base["tax_change_pct"] < 0).mean() * 100, pct)
     H.add("SfrWinRateRefined", (sfr_refined["tax_change_pct"] < 0).mean() * 100, pct)
 
+    # --- Citywide ALL non-exempt parcels: baseline vs refined ---
+    # The SFR figures above answer "what happens to homeowners"; these answer
+    # "what happens to the parcel universe", which is the wider denominator and
+    # the one to quote when the claim is about properties rather than households.
+    refined_taxable = refined[~refined["is_fully_exempt"]]
+    H.add("AllMedianBaseline", base_taxable["tax_change_pct"].median(), pct)
+    H.add("AllMedianRefined", refined_taxable["tax_change_pct"].median(), pct)
+    H.add("AllWinRateBaseline", (base_taxable["tax_change_pct"] < 0).mean() * 100, pct)
+    H.add("AllWinRateRefined", (refined_taxable["tax_change_pct"] < 0).mean() * 100, pct)
+    H.add("AllParcelCountBaseline", len(base_taxable), lambda x: f"{x:,}")
+
     # --- Decile progressivity (top vs bottom decile, refined model shift vs baseline) ---
     m = base.merge(refined, on="parcel_id", suffixes=("_base", "_refined"))
     sfr = m[m["property_category_base"] == "Single Family Residential"].copy()
