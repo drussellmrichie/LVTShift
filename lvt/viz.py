@@ -943,8 +943,17 @@ def _make_category_chart(
     city_title: str,
     right_col_pad: float = 120.0,
     min_count: int = 50,
+    footnote: Optional[str] = None,
 ) -> plt.Figure:
-    """Build the property-category impact figure and return it (does not show/save)."""
+    """Build the property-category impact figure and return it (does not show/save).
+
+    Parameters
+    ----------
+    footnote : str, optional
+        Caption text rendered below the chart (e.g. to flag a modeling assumption
+        specific to one category, like an imputed building value). Wrapped
+        automatically; pass ``None`` to omit.
+    """
     plot_df = cat_summary[cat_summary['property_count'] >= min_count].copy()
     plot_df = plot_df.sort_values('median_tax_change_pct').reset_index(drop=True)
     if 'total_tax_change_dollars' not in plot_df.columns:
@@ -978,30 +987,78 @@ def _make_category_chart(
     ax.axvline(0, color='black', linewidth=1, linestyle='dotted', zorder=1)
 
     max_abs = max(abs(min(pcts)), abs(max(pcts))) if pcts else 1.0
-    right_x = max_abs + right_col_pad
+    # Provisional, generous xlim so the per-row label text below isn't clipped before
+    # we can measure its actual rendered width (needed to place the Net Change column
+    # far enough right that long labels on the longest bar never collide with it).
+    provisional_right_x = max_abs + right_col_pad + 400.0
+    ax.set_xlim(-provisional_right_x, provisional_right_x)
+    ax.set_ylim(-0.8, n - 0.05)
+
+    label_texts = []
+    for i, (cat, pct, dol, cnt) in enumerate(zip(cats, pcts, dollars, counts)):
+        tx = pct + 1.2 if pct >= 0 else pct - 1.2
+        ha = 'left' if pct >= 0 else 'right'
+        dol_s = f'${dol:,.0f}' if dol >= 0 else f'-${abs(dol):,.0f}'
+        label_texts.append(
+            ax.text(tx, i + 0.18, cat, ha=ha, va='center', fontsize=14, fontweight='bold')
+        )
+        label_texts.append(
+            ax.text(tx, i - 0.03, f'Median: {dol_s}, {pct:+.1f}%', ha=ha, va='center',
+                    fontsize=12, fontweight='bold')
+        )
+        label_texts.append(
+            ax.text(tx, i - 0.23, f'{cnt:,} parcels', ha=ha, va='center',
+                    fontsize=11, color='#888888')
+        )
+
+    # Measure the actual rendered extent of every label so the Net Change column
+    # clears even the widest one (long category names + large % swings, as on
+    # Philadelphia's "Abated / Construction Exemption" bar, previously overlapped
+    # the Net Change column because right_x was sized only from `max_abs`, not
+    # from the rendered text width).
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    inv = ax.transData.inverted()
+    max_label_right = max_abs
+    for t in label_texts:
+        bbox = t.get_window_extent(renderer=renderer)
+        (x0, _), (x1, _) = inv.transform([[bbox.x0, bbox.y0], [bbox.x1, bbox.y1]])
+        max_label_right = max(max_label_right, x0, x1)
+
+    right_x = max_label_right + 40.0
 
     ax.text(right_x, n - 0.25, 'Net Change', ha='center', va='bottom',
             fontsize=15, fontweight='bold')
 
-    for i, (cat, pct, dol, cnt, tot) in enumerate(
-        zip(cats, pcts, dollars, counts, totals)
-    ):
-        tx = pct + 1.2 if pct >= 0 else pct - 1.2
-        ha = 'left' if pct >= 0 else 'right'
-        dol_s = f'${dol:,.0f}' if dol >= 0 else f'-${abs(dol):,.0f}'
+    total_texts = []
+    for i, tot in enumerate(totals):
         tot_s = f'${tot:,.0f}' if tot >= 0 else f'-${abs(tot):,.0f}'
-        ax.text(tx, i + 0.18, cat, ha=ha, va='center', fontsize=14, fontweight='bold')
-        ax.text(tx, i - 0.03, f'Median: {dol_s}, {pct:+.1f}%', ha=ha, va='center',
-                fontsize=12, fontweight='bold')
-        ax.text(tx, i - 0.23, f'{cnt:,} parcels', ha=ha, va='center',
-                fontsize=11, color='#888888')
-        ax.text(right_x, i, tot_s, ha='center', va='center', fontsize=12, fontweight='bold')
+        total_texts.append(
+            ax.text(right_x, i, tot_s, ha='center', va='center', fontsize=12, fontweight='bold')
+        )
+
+    # Re-measure so the right xlim clears the widest Net Change dollar figure too
+    # (it's centered on right_x, so it extends on both sides of that point).
+    fig.canvas.draw()
+    max_total_right = right_x
+    for t in total_texts:
+        bbox = t.get_window_extent(renderer=renderer)
+        (_, _), (x1, _) = inv.transform([[bbox.x0, bbox.y0], [bbox.x1, bbox.y1]])
+        max_total_right = max(max_total_right, x1)
 
     ax.set_title(f'Property Category Tax Impact — {city_title}',
                  fontsize=18, fontweight='bold', pad=18)
-    ax.set_xlim(-right_x, right_x + 60)
+    ax.set_xlim(-right_x, max_total_right + 30.0)
     ax.set_ylim(-0.8, n - 0.05)
     fig.tight_layout()
+
+    if footnote:
+        import textwrap
+        wrapped = '\n'.join(textwrap.wrap(footnote, width=140))
+        fig.subplots_adjust(bottom=fig.subplotpars.bottom + 0.03 * (wrapped.count('\n') + 1))
+        fig.text(0.01, 0.005, wrapped, ha='left', va='bottom',
+                  fontsize=9, style='italic', color='#555555')
+
     return fig
 
 
@@ -1230,6 +1287,7 @@ def create_city_report(
     show: bool = True,
     min_category_count: int = 50,
     census_categories: Optional[List[str]] = None,
+    category_chart_footnote: Optional[str] = None,
 ) -> dict:
     """
     Generate standard analysis charts from a city's standard export DataFrame.
@@ -1265,6 +1323,9 @@ def create_city_report(
         Property categories to include in the "residential" census quintile charts.
         Defaults to :data:`_RESIDENTIAL_CATEGORIES` when ``None``.  Pass an empty list
         ``[]`` to skip the residential-filtered version entirely.
+    category_chart_footnote : str, optional
+        Caption rendered below ``category_impact.png`` (e.g. to flag a modeling
+        assumption specific to one category). ``None`` omits it.
 
     Returns
     -------
@@ -1308,7 +1369,8 @@ def create_city_report(
     )
     if not cat_summary.empty:
         fig = _make_category_chart(cat_summary, cat_col, city_title,
-                                   min_count=min_category_count)
+                                   min_count=min_category_count,
+                                   footnote=category_chart_footnote)
         path = os.path.join(city_dir, 'category_impact.png')
         fig.savefig(path, dpi=150, bbox_inches='tight')
         charts_saved.append(path)
