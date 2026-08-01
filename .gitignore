@@ -138,6 +138,15 @@ analysis/maps/
 *.cpg
 *.png
 
+# Philadelphia webmap: the JS/Python agreement fixture must be committed, but
+# *.json is ignored repo-wide above, so it needs an explicit negation.
+!tests/fixtures/
+!tests/fixtures/*.json
+
+# Philadelphia webmap build staging
+analysis/webmap/
+_staging/
+
 # Temporary files
 *.tmp
 *.temp

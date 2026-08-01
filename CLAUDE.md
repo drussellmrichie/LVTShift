@@ -226,8 +226,6 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **Abated parcels: impute building value for the reform scenario.** Parcels with `taxable_building = 0` and active abatements have LR=1.0 in the split-rate base, producing an artificially large result. Fix: set `model_building = 4 × taxable_land` (restoring OPA's implicit 20% land ratio) for the reform calculation only. Keep `current_tax` as actual (land-only). Add $12.5B to the reform improvement base; both millages decrease ~5%. The "Abated / Construction Exemption" category shows +315.5%, representing the shift from an almost-free land-only bill to a full LVT bill on the estimated complete value.
 
-**`model_lycd.ipynb` needs the same abated-parcel imputation, applied to LYCD land.** It had instead been copy-pasted from the post-abatement notebooks (`model_building = exempt_building`, restoring the actual assessed value as if the abatement had expired) — a bug, not an intentional choice, that made `philadelphia_lycd.csv`'s improvement values for the 30,111 abated parcels element-wise identical to both post-abatement exports instead of isolating the land-value effect. Fixed 2026-08-01: `model_lycd.ipynb` Step 8 now imputes `model_building = 4 × lycd_land_value`, mirroring the OPA panel's pattern above; re-run and re-exported.
-
 **Fully exempt SFR parcels are low-value homesteaders, not vacant lots.** ~27K SFR parcels with `market_value <= $80K` have their entire assessed value wiped out by the Homestead Exemption. They show up as `full_exmp=1` and end up in "Vacant Land" if not reclassified. Override 4 moves them to "Single Family Residential — Exempt."
 
 **Kernel name:** On Windows, the `cle-venv-new` kernel may not be registered. Check `jupyter kernelspec list` and use the available kernel (e.g., `python3`) for `nbconvert --execute`.
@@ -237,6 +235,37 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 **All four notebooks share one cache: `cities/philadelphia/data/parcels.gpq`.** Any rebuild of the cache (the fetch fallbacks in `model.ipynb` and `model_post_abatement.ipynb`) must emit the full column superset: the assessment value columns plus `pin` + `total_area` (LYCD lot-area chain) and `owner_1` + `owner_2` (owner-concentration analysis in `model.ipynb`). The LYCD notebooks read the cache unconditionally and raise a clear error if columns are missing. Keep `pin` integer-typed — the LYCD notebooks stringify it as a join key, and a float dtype would add a `.0` suffix and break the PIN match. Also note Carto's `assessments.year` column is varchar: the filter must be `WHERE year = '2024'` (quoted); an unquoted integer comparison returns HTTP 400.
 
 **`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
+
+**`parcels.gpq` geometry is Point (OPA centroids), not polygons.** Its `geometry` column holds one
+point per parcel — there is no lot-outline geometry in this cache. `scripts/build_philadelphia_webmap.py --geometry polygon`
+upgrades ~90% of parcels to real DOR lot outlines by joining `parcels.gpq.pin` to a *different* file:
+`cities/philadelphia/data/Philadelphia_DOR_Parcels_2023.geojson` (504 MB, WGS84, integer `PIN`
+field). The sibling shapefile in `cities/philadelphia/data/dor_parcels/` looks like the obvious
+choice (94 MB vs. 504 MB) but **has no `PIN` field at all** — only `PARCELID` and `TENCODE`, neither
+of which matches `parcels.gpq.pin` — so it cannot be used for this join.
+
+**The two scenario CSV encoding/data quirks the webmap build works around:**
+- `philadelphia_lycd.csv` and `philadelphia_lycd_post_abatement.csv` write `property_category` as
+  UTF-8 re-encoded through cp1252 (`Commercial â€” Exempt` instead of `Commercial — Exempt`). The
+  OPA-land CSVs (`philadelphia.csv`, `philadelphia_post_abatement.csv`) do not have this problem —
+  it is specific to whatever the LYCD notebooks' CSV write path does differently. Worth fixing at
+  the source; the webmap build repairs it with a cp1252→UTF-8 round-trip rather than depending on it
+  being fixed upstream.
+- 10 `parcel_id` values appear twice across the export (14 rows total) with genuinely different
+  attributes on each occurrence — not a formatting artifact. `881000395` is one example: one row is
+  fully exempt, the other is an abated parcel with `current_tax = 1140.84`. Any downstream consumer
+  that dedupes on `parcel_id` needs to do so *positionally* and identically across all four exports
+  (they share one row order), not independently per file, or different scenarios can end up
+  describing different physical parcels under the same id.
+- LYCD pre-abatement's abated-parcel improvement-value imputation bug (was copy-pasted from the
+  post-abatement notebooks) is fixed — see the "`model_lycd.ipynb` needs the same abated-parcel
+  imputation" note earlier in this section.
+
+**GDAL cannot read GeoParquet in this environment on either side.** Ubuntu's `gdal-bin` (used for
+the webmap's tile build in WSL) ships no Parquet/Arrow driver and no plugin package supplies one.
+Separately, the Windows conda `gdal`/`pyogrio` install fails outright (`GDAL DLL could not be
+found`), so no vector I/O of any format works from Windows Python. Do not assume `ogr2ogr -f Parquet`
+works just because `ogr2ogr` is on PATH — check `ogr2ogr --formats` for the format you need.
 
 ### Philadelphia — Wage Tax Swap
 

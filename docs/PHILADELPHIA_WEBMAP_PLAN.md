@@ -1,15 +1,45 @@
 # Philadelphia LVT Interactive Webmap
 
-> **Status: proposal — paused before implementation.** Nothing described in the *Design* or *Files*
-> sections has been built. This document exists to be reviewed and argued with first.
+> **Status: implemented, unpublished.** The generator, viewer, and Python↔JS agreement test
+> described below are built and passing against the real 579,804-parcel dataset. What follows is
+> the original proposal, kept for its rationale — several of its concrete assumptions turned out
+> wrong once real data and a real machine were available, corrected in the summary below rather than
+> edited into the body, so the record of what was checked against live tools stays intact.
 >
-> Open decisions blocking implementation:
-> - Whether to build the custom site at all, versus leaning on CivicMapper / Put It On A Map (see
->   the section below — both domains were unreachable from the environment this was drafted in, so
->   that comparison rests on secondhand descriptions and should be checked).
-> - The Progress & Poverty GitHub org handle, and repo-creation access scoped to it.
-> - Whether the LYCD cached inputs (`parcel_areas_by_pin.parquet`, GMA zone assignments) still
->   exist on a local machine — see *Risks*. Worth checking before anything else.
+> **What changed on implementation, relative to this proposal:**
+> - **Repo split reversed.** §6/§Files below has the viewer source living in LVTShift and only
+>   build output landing in the site repo. That was reversed before writing any code: viewer source
+>   (`index.html`, `style.css`, `app.js`, `solve.js`, `vendor/`) is hand-authored and committed
+>   directly in `philly-lvt-webmap`, as permanent source that is never regenerated. The generator
+>   (`scripts/build_philadelphia_webmap.py`, in this repo) writes exactly two files into the site
+>   repo — `manifest.json` and `philadelphia.pmtiles` — and nothing else, which makes the clobbering
+>   hazard §Files worried about structurally impossible rather than a build-discipline problem.
+> - **`parcels.gpq` geometry is Point, not polygon** — OPA centroids, one per parcel. The default
+>   build renders parcels as a MapLibre `circle` layer. A `--geometry polygon` mode joins ~90.4% of
+>   parcels to real DOR lot outlines and renders them as a `fill` layer alongside the `circle`
+>   fallback for the rest — but the join source is **not** the DOR shapefile most likely to be
+>   reached for first (`cities/philadelphia/data/dor_parcels/*.shp` has no `PIN` field at all); it's
+>   the 504 MB GeoJSON sibling, which does.
+> - **The `taxable_* == model_*` assertion (§2) passes**, to 1e-12, on the real data — the
+>   `extra_cols` fallback it describes was never needed.
+> - **The LYCD cached inputs risk (§Risks) is closed** — `parcel_areas_by_pin.parquet` and
+>   `parcel_gma_assignment.parquet` are both present, no notebook re-run was needed at all; all four
+>   scenario CSVs and `parcels.gpq` were already on disk.
+> - **`--synthetic N` (§5) was dropped**, in favor of `--bbox`/`--sample` slices of the real data —
+>   real slices catch the join, dedupe, and encoding issues a synthetic set cannot manufacture, and
+>   real data was available, unlike in the drafting environment.
+> - One data-quality issue surfaced during the build that is **not** a webmap bug but was worth
+>   fixing upstream: the LYCD CSVs' category labels are cp1252-mangled UTF-8 (worked around in the
+>   build, not fixed at the source). A second one — LYCD pre-abatement's improvement-value series
+>   being identical to the post-abatement scenarios rather than `4 × LYCD land` — was a real bug
+>   (copy-pasted post-abatement logic) and is now fixed at the source; see `LVTShift/CLAUDE.md`'s
+>   Philadelphia section.
+>
+> Resolved open decisions from the original list: the LYCD-inputs risk is closed (above). The
+> Progress & Poverty org handle is still unknown and is the only thing gating publication — the
+> generator, viewer, and tests are otherwise complete and locally verified. The CivicMapper / Put It
+> On A Map question was not revisited; nothing here forecloses it, since the GeoParquet export
+> §Design describes is still on the roadmap as a distinct, not-yet-built piece.
 
 ## Context
 
