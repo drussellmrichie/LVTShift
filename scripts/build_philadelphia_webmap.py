@@ -21,6 +21,7 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import argparse
 import hashlib
 import json
@@ -52,7 +53,8 @@ from lvt.parcel_map import _COLOR_STOPS, _TIPPECANOE_BASE_ARGS  # noqa: E402
 
 DEFAULT_SITE = Path("C:/projects/philly-lvt-webmap")
 DATA_DIR = REPO_ROOT / "analysis" / "data"
-PARCELS_GPQ = REPO_ROOT / "cities" / "philadelphia" / "data" / "parcels.gpq"
+TAX_YEAR = int(os.environ.get("LVT_TAX_YEAR", 2026))   # override: LVT_TAX_YEAR=2027
+PARCELS_GPQ = REPO_ROOT / "cities" / "philadelphia" / "data" / f"parcels_ty{TAX_YEAR}.gpq"
 
 # DOR parcel polygons, keyed by `PIN` (matches parcels.gpq.pin). The sibling
 # shapefile in this same directory has no PIN field at all (only PARCELID and
@@ -99,7 +101,7 @@ class Scenario:
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario(
         key="opa",
-        csv="philadelphia.csv",
+        csv=f"philadelphia_ty{TAX_YEAR}.csv",
         label="OPA land values",
         short="OPA",
         group="pre_abatement",
@@ -114,7 +116,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         key="lycd",
-        csv="philadelphia_lycd.csv",
+        csv=f"philadelphia_lycd_ty{TAX_YEAR}.csv",
         label="LYCD land values",
         short="LYCD",
         group="pre_abatement",
@@ -129,7 +131,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         key="opa_post",
-        csv="philadelphia_post_abatement.csv",
+        csv=f"philadelphia_post_abatement_ty{TAX_YEAR}.csv",
         label="OPA, abatements expired",
         short="OPA post",
         group="post_abatement",
@@ -142,7 +144,7 @@ SCENARIOS: tuple[Scenario, ...] = (
     ),
     Scenario(
         key="lycd_post",
-        csv="philadelphia_lycd_post_abatement.csv",
+        csv=f"philadelphia_lycd_post_abatement_ty{TAX_YEAR}.csv",
         label="LYCD, abatements expired",
         short="LYCD post",
         group="post_abatement",

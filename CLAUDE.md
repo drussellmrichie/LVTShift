@@ -232,7 +232,44 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **Philadelphia has four notebooks.** `cities/philadelphia/` contains `model.ipynb` (OPA), `model_lycd.ipynb` (LYCD), `model_post_abatement.ipynb` (OPA post-abatement), and `model_lycd_post_abatement.ipynb` (LYCD post-abatement). All four export to `analysis/data/philadelphia*.csv` with a `parcel_id` column (added via `parcel_id_col='parcel_number'` in `save_standard_export`).
 
-**All four notebooks share one cache: `cities/philadelphia/data/parcels.gpq`.** Any rebuild of the cache (the fetch fallbacks in `model.ipynb` and `model_post_abatement.ipynb`) must emit the full column superset: the assessment value columns plus `pin` + `total_area` (LYCD lot-area chain) and `owner_1` + `owner_2` (owner-concentration analysis in `model.ipynb`). The LYCD notebooks read the cache unconditionally and raise a clear error if columns are missing. Keep `pin` integer-typed — the LYCD notebooks stringify it as a join key, and a float dtype would add a `.0` suffix and break the PIN match. Also note Carto's `assessments.year` column is varchar: the filter must be `WHERE year = '2024'` (quoted); an unquoted integer comparison returns HTTP 400.
+**The parcel cache is keyed by tax year: `cities/philadelphia/data/parcels_ty<YEAR>.gpq`.** Build it
+with `python scripts/build_philadelphia_parcel_cache.py --year 2026`; the notebooks only read it and
+raise a clear error if it is missing. The year suffix is deliberate — `opa_properties_public` always
+carries the *latest* assessment year, so an unsuffixed cache makes it easy to model one year's
+taxable values against another year's rate and revenue target with no visible symptom. The builder
+emits the full column superset every notebook needs: the assessment value columns plus `pin` +
+`total_area` (LYCD lot-area chain) and `owner_1` + `owner_2` (owner-concentration analysis in
+`model.ipynb`). Keep `pin` integer-typed — the LYCD notebooks stringify it as a join key, and a float
+dtype would add a `.0` suffix and break the PIN match. Also note Carto's `assessments.year` column is
+varchar: the filter must be `WHERE year = '2026'` (quoted); an unquoted integer comparison returns
+HTTP 400.
+
+**Tax-year rates and revenue targets live in `lvt/philadelphia.py`, not in the notebooks.** Each
+notebook sets `TAX_YEAR` and derives millage, the city-only cross-check rate, the validation target
+and the cache path from `tax_year_params()`. This exists because the combined rate has been 1.3998%
+for years while the *City/School split moved* (0.6317/0.7681 at TY2024 → 0.6159/0.7839 from TY2025),
+so a hardcoded `city_only_rate = 6.317` keeps validating against the wrong denominator while nothing
+about the combined-levy model looks wrong. Rates and targets are cited per year in that module. Note
+TY2027 has **no** revenue target — its bills are not due until March 2027 — so the validation cell
+skips the assert and labels the run forward-looking; its City/School split is carried forward from
+FY2026 and is not independently confirmed.
+
+**Lot area: never take a pre-computed `Shape__Area` from an ArcGIS service without checking the
+service CRS.** This was a real bug. The DOR parcels FeatureServer is served in **EPSG:3857**, where
+area is inflated by `1/cos²(latitude)` ≈ **1.704×** at Philadelphia's latitude (distance by
+`1/cos(lat)` ≈ 1.31×). The old chain converted `Shape__Are` m²→ft² but never reprojected, so ~5% of
+parcels sat on an area scale 1.7× larger than the 94.5% sourced from OPA's true-ground `total_area` —
+and because the fallback was a point-in-polygon join, every parcel inside one polygon inherited its
+*full* area. Total lot area came to 3.08× the city's actual land area. `scripts/fetch_dor_parcel_areas.py`
+now fetches PIN-keyed areas and de-distorts them with a per-parcel `cos²(latitude)` correction; the
+corrected areas agree with OPA `total_area` at a median ratio of 0.995, and the notebooks assert that
+total lot area stays under 1.5× the city.
+
+Worth knowing *why this barely moved the results*: LYCD land value is `zone_psf × area` where
+`zone_psf` is itself `median(market_value / area)`, so the method is **exactly scale-invariant in lot
+area** — a uniform area error cancels completely. Only *mixed* conventions and *relative* area errors
+matter. Do not infer from the small headline movement that the area layer is unimportant; it is
+load-bearing for any per-parcel land value and for anything that is not scale-invariant.
 
 **`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
 
