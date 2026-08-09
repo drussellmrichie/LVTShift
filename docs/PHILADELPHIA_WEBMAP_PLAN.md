@@ -1,22 +1,45 @@
 # Philadelphia LVT Interactive Webmap
 
-> **Status: reviewed and unblocked; implementation not started.** Nothing in the *Design* section
-> has been built — no generator, no viewer, no tiles. What has happened (2026-08-01) is that every
-> open decision was resolved, every data assumption was checked against the real inputs, and the
-> sibling publishing project was scaffolded. This document remains the spec to argue with.
+> **Status: implemented, unpublished.** The generator, viewer, and Python↔JS agreement test
+> described below are built and passing against the real 579,804-parcel dataset. What follows is
+> the original proposal, kept for its rationale — several of its concrete assumptions turned out
+> wrong once real data and a real machine were available, corrected in the summary below rather than
+> edited into the body, so the record of what was checked against live tools stays intact.
 >
-> All three original open decisions are now closed:
-> - ~~Whether to build the custom site at all, versus leaning on CivicMapper / Put It On A Map.~~
->   **Resolved 2026-08-01** — the prior-art review below was redone against the live tools rather
->   than secondhand descriptions. Build-custom holds; see *Prior art* for what changed.
-> - ~~The Progress & Poverty GitHub org handle, and repo-creation access scoped to it.~~
->   **Resolved 2026-08-01** — org is `Progress-and-Poverty-Institute`, user is an admin. The sibling
->   project is scaffolded at `C:\projects\philly-lvt-webmap`; the GitHub repo awaits only a
->   public-vs-private call. **No decisions now block implementation.** Remaining work is tasks:
->   install `tippecanoe` + `ogr2ogr` via WSL, then write the generator and viewer.
-> - ~~Whether the LYCD cached inputs still exist on a local machine.~~ **Resolved 2026-08-01** —
->   they do, along with all four built CSVs. See *Inputs verified*, which closes every data risk
->   this plan listed. Tile size remains unmeasured, and the tile toolchain is not yet installed.
+> **What changed on implementation, relative to this proposal:**
+> - **Repo split reversed.** §6/§Files below has the viewer source living in LVTShift and only
+>   build output landing in the site repo. That was reversed before writing any code: viewer source
+>   (`index.html`, `style.css`, `app.js`, `solve.js`, `vendor/`) is hand-authored and committed
+>   directly in `philly-lvt-webmap`, as permanent source that is never regenerated. The generator
+>   (`scripts/build_philadelphia_webmap.py`, in this repo) writes exactly two files into the site
+>   repo — `manifest.json` and `philadelphia.pmtiles` — and nothing else, which makes the clobbering
+>   hazard §Files worried about structurally impossible rather than a build-discipline problem.
+> - **`parcels.gpq` geometry is Point, not polygon** — OPA centroids, one per parcel. The default
+>   build renders parcels as a MapLibre `circle` layer. A `--geometry polygon` mode joins ~90.4% of
+>   parcels to real DOR lot outlines and renders them as a `fill` layer alongside the `circle`
+>   fallback for the rest — but the join source is **not** the DOR shapefile most likely to be
+>   reached for first (`cities/philadelphia/data/dor_parcels/*.shp` has no `PIN` field at all); it's
+>   the 504 MB GeoJSON sibling, which does.
+> - **The `taxable_* == model_*` assertion (§2) passes**, to 1e-12, on the real data — the
+>   `extra_cols` fallback it describes was never needed.
+> - **The LYCD cached inputs risk (§Risks) is closed** — `parcel_areas_by_pin.parquet` and
+>   `parcel_gma_assignment.parquet` are both present, no notebook re-run was needed at all; all four
+>   scenario CSVs and `parcels.gpq` were already on disk.
+> - **`--synthetic N` (§5) was dropped**, in favor of `--bbox`/`--sample` slices of the real data —
+>   real slices catch the join, dedupe, and encoding issues a synthetic set cannot manufacture, and
+>   real data was available, unlike in the drafting environment.
+> - One data-quality issue surfaced during the build that is **not** a webmap bug but was worth
+>   fixing upstream: the LYCD CSVs' category labels are cp1252-mangled UTF-8 (worked around in the
+>   build, not fixed at the source). A second one — LYCD pre-abatement's improvement-value series
+>   being identical to the post-abatement scenarios rather than `4 × LYCD land` — was a real bug
+>   (copy-pasted post-abatement logic) and is now fixed at the source; see `LVTShift/CLAUDE.md`'s
+>   Philadelphia section.
+>
+> Resolved open decisions from the original list: the LYCD-inputs risk is closed (above). The
+> Progress & Poverty org handle is still unknown and is the only thing gating publication — the
+> generator, viewer, and tests are otherwise complete and locally verified. The CivicMapper / Put It
+> On A Map question was not revisited; nothing here forecloses it, since the GeoParquet export
+> §Design describes is still on the roadmap as a distinct, not-yet-built piece.
 
 ## Context
 

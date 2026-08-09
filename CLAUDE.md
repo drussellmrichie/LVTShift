@@ -236,6 +236,37 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
 
+**`parcels.gpq` geometry is Point (OPA centroids), not polygons.** Its `geometry` column holds one
+point per parcel — there is no lot-outline geometry in this cache. `scripts/build_philadelphia_webmap.py --geometry polygon`
+upgrades ~90% of parcels to real DOR lot outlines by joining `parcels.gpq.pin` to a *different* file:
+`cities/philadelphia/data/Philadelphia_DOR_Parcels_2023.geojson` (504 MB, WGS84, integer `PIN`
+field). The sibling shapefile in `cities/philadelphia/data/dor_parcels/` looks like the obvious
+choice (94 MB vs. 504 MB) but **has no `PIN` field at all** — only `PARCELID` and `TENCODE`, neither
+of which matches `parcels.gpq.pin` — so it cannot be used for this join.
+
+**The two scenario CSV encoding/data quirks the webmap build works around:**
+- `philadelphia_lycd.csv` and `philadelphia_lycd_post_abatement.csv` write `property_category` as
+  UTF-8 re-encoded through cp1252 (`Commercial â€” Exempt` instead of `Commercial — Exempt`). The
+  OPA-land CSVs (`philadelphia.csv`, `philadelphia_post_abatement.csv`) do not have this problem —
+  it is specific to whatever the LYCD notebooks' CSV write path does differently. Worth fixing at
+  the source; the webmap build repairs it with a cp1252→UTF-8 round-trip rather than depending on it
+  being fixed upstream.
+- 10 `parcel_id` values appear twice across the export (14 rows total) with genuinely different
+  attributes on each occurrence — not a formatting artifact. `881000395` is one example: one row is
+  fully exempt, the other is an abated parcel with `current_tax = 1140.84`. Any downstream consumer
+  that dedupes on `parcel_id` needs to do so *positionally* and identically across all four exports
+  (they share one row order), not independently per file, or different scenarios can end up
+  describing different physical parcels under the same id.
+- LYCD pre-abatement's abated-parcel improvement-value imputation bug (was copy-pasted from the
+  post-abatement notebooks) is fixed — see the "`model_lycd.ipynb` needs the same abated-parcel
+  imputation" note earlier in this section.
+
+**GDAL cannot read GeoParquet in this environment on either side.** Ubuntu's `gdal-bin` (used for
+the webmap's tile build in WSL) ships no Parquet/Arrow driver and no plugin package supplies one.
+Separately, the Windows conda `gdal`/`pyogrio` install fails outright (`GDAL DLL could not be
+found`), so no vector I/O of any format works from Windows Python. Do not assume `ogr2ogr -f Parquet`
+works just because `ogr2ogr` is on PATH — check `ogr2ogr --formats` for the format you need.
+
 ### Philadelphia — Wage Tax Swap
 
 `cities/philadelphia/model_wage_tax_swap.ipynb` is a fifth Philadelphia notebook, but it doesn't
