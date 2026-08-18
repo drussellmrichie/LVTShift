@@ -1,0 +1,145 @@
+# Who owns Philadelphia's vacant land and parking lots?
+
+*Generated from `results/` by `make_brief.py` — do not edit numbers in this file by hand.
+Tax year {{tax_year}}, {{total_parcels}} parcels, {{model_label}}.*
+
+## The short version
+
+Vacant land and surface parking are far more LLC-owned than housing, but the LLCs are
+mostly **local**, not out-of-state. Both halves of that sentence matter politically, and the
+second half cuts against the framing an LVT campaign might reach for first.
+
+- **{{vacant_llc_land_share}} of privately-owned vacant land value is held by LLCs**
+  (upper bound {{vacant_llc_land_share_upper}}; see *Truncation* below), against
+  **{{sfr_llc_land_share}} for single-family homes** — a **{{vacant_vs_sfr_ratio}}×** gap.
+- Surface parking runs {{parking_comm_llc_land_share}} (commercial lots) to
+  {{parking_noncomm_llc_land_share}} (non-commercial); structured garages
+  {{garage_llc_land_share}}.
+- But LLC owners of vacant land and parking are **{{incity_land_share_of_llc}} in-city by
+  land value** and only **{{oos_land_share_of_llc}} out-of-state**. Of
+  {{llc_vp_entities}} distinct LLC entities in these categories, {{incity_entities}} mail to
+  a Philadelphia address and {{oos_entities}} mail out of state.
+- Under the modelled reform, LLC-owned vacant land and parking pay
+  **{{llc_vp_tax_change}} more per year** across {{llc_vp_parcels}} parcels.
+
+## Vacant land is not the most LLC-owned category
+
+It ranks behind two others. Industrial land is {{industrial_llc_land_share}} LLC-owned and
+large multi-family {{large_mf_llc_land_share}}, both above vacant land's
+{{vacant_llc_land_share}}. A campaign that claims vacant land is uniquely investor-held is
+overstating a real but narrower fact: what is distinctive about vacant land is the gap
+against *housing*, not against commercial property generally.
+
+The full ranking is in `results/llc_share_by_category.csv`.
+
+## Individuals still own most vacant parcels
+
+Within taxable vacant land, individuals hold {{vacant_individual_parcels}} parcels against
+{{vacant_business_parcels}} held by business entities — individuals own more *parcels*,
+businesses slightly more *value*. "Vacant lots are owned by speculators" is true of the
+dollars and false of the parcel count, and any messaging that implies otherwise will not
+survive contact with a reporter pulling ten addresses at random.
+
+Note also that most *publicly* owned vacant land — the City, Land Bank, Redevelopment
+Authority, PHA — is fully exempt and therefore sits outside this taxable universe entirely.
+Only {{vacant_parking_public_parcels}} of the {{vacant_parking_parcels}} parcels in the
+headline categories are publicly owned ({{vacant_parking_public_parcel_share}}). Any claim
+about "who owns the vacant land" that includes exempt public holdings is answering a
+different question than the one about who pays the tax.
+
+## Across all property types, LLCs really are more absentee — but vacant land least of all
+
+Owner mailing address is resolved for every private owner in all
+{{geography_categories_covered}} categories (`results/owner_geography_by_category.csv`), which
+gives the LLC figures a denominator:
+
+| Group, citywide | In-city | Out-of-state |
+|---|---|---|
+| All private owners | {{city_all_incity_land_share}} | {{city_all_oos_land_share}} |
+| LLC owners only | {{city_llc_incity_land_share}} | {{city_llc_oos_land_share}} |
+
+So LLCs *are* markedly more out-of-town than owners generally. But the categories a land
+value tax targets sit at the local end of that range: vacant-land LLCs are
+{{vacant_llc_oos_land_share}} out-of-state, well below the {{city_llc_oos_land_share}} LLC
+citywide average — though still above single-family's {{sfr_llc_oos_land_share}}. The most
+absentee LLC category by a wide margin is commercial property at
+{{commercial_llc_oos_land_share}}.
+
+The uncomfortable implication for messaging: "out-of-state speculators are sitting on our
+vacant lots" is the one version of the claim the data does not support. "Absentee owners hold
+our commercial land" is much better supported — but that is a different reform argument.
+
+## The out-of-state story is real but small
+
+Out-of-state LLC ownership is genuine rather than a mail-drop artifact, and it is
+concentrated:
+
+- **{{delaware_parcels}} parcels** in the whole set mail to Delaware — the registered-agent
+  confound that usually contaminates this analysis is essentially absent here.
+- The out-of-state vacant/parking parcels spread across {{oos_distinct_addresses}} distinct
+  mailing addresses, with at most {{oos_max_names_at_one_address}} different LLC names sharing
+  any one address. Citywide across all property types it is
+  {{city_oos_distinct_addresses}} addresses, at most
+  {{city_oos_max_names_at_one_address}} names at any one. Registered-agent hubs look like
+  dozens of names at one address; neither scope does.
+- But the top {{oos_top_n}} addresses hold {{oos_top10_address_land_share}} of out-of-state
+  LLC land value — a handful of large institutional owners (see
+  `results/out_of_state_mail_addresses.csv`), not a broad absentee class.
+
+So the honest formulation is: **a small number of large out-of-town corporate owners, and a
+much larger number of local LLCs.**
+
+## How much to trust these numbers
+
+**Classifier accuracy (hand-adjudicated, n={{validation_n}}).** LLC precision is
+{{llc_precision}} — no false positives in the sample — so the LLC share is a clean *lower*
+bound. Per-form precision is in `results/classifier_precision.csv`.
+
+**Truncation.** OPA truncates owner names at two widths, {{truncation_widths}} characters, cutting the
+legal suffix off. {{obscured_share}} of sampled `Other business` names are entities whose
+form the string cannot resolve (`NOAH REALTY INVESTMENTS L`). Truncation only ever moves
+entities *out* of the LLC bucket, so every LLC figure here is a floor; the reported upper
+bound reallocates those parcels at the LLC rate observed among untruncated names.
+
+**Mailing address is a location proxy, not beneficial ownership.** An out-of-state address
+may be an accountant for a Philadelphian; a Philadelphia address may front an entity owned
+elsewhere. True beneficial ownership is not obtainable at scale by any route: the FinCEN
+beneficial-ownership database is not public and is exempt from FOIA, and its reporting
+requirement for domestic companies was narrowed in 2025. Tracing individual owners through
+PA Department of State filings and deeds is feasible by hand for the largest holders only.
+
+**Universe definition.** Vacant land here is the assessor's own building codes, which is what
+the tax actually bills. It agrees reasonably with the City's 2025 Land Use layer
+(Jaccard {{vacant_jaccard_landuse}}) and with L&I's Vacant Indicators
+(Jaccard {{vacant_jaccard_lni}}). The parking universe does **not** agree with the Land Use
+layer (Jaccard {{parking_jaccard_landuse}}) — that layer identifies only
+{{landuse_parking_count}} parking parcels citywide against the assessor's
+{{opa_parking_count}}, so it under-identifies surface parking badly and is not usable as a
+parking source. The assessor codes are corroborated instead by an independent OPA extract at
+Jaccard {{parking_jaccard_orphan}}. Full comparison in `results/universe_reconciliation.csv`.
+
+**Land values.** Headline figures use OPA taxable land values. Re-running on the LYCD
+location-value model moves the vacant-land LLC share by
+{{vacant_lycd_diff_pp}} percentage points, and the largest divergence in any category is
+{{max_lycd_diff_pp}} points — see `results/robustness_opa_vs_lycd.csv`.
+
+**Concentration figures are lower bounds.** Entity resolution unions LLC names that share a
+mailing address, but only for business-class names — merging individuals by address chains
+condo towers and management offices into fictitious mega-owners. Shell networks registered
+at different addresses under unrelated names remain unresolved.
+
+## Files
+
+| File | Contents |
+|---|---|
+| `results/llc_share_by_category.csv` | LLC / +LP / all-business shares per category, all-parcel and private-only |
+| `results/ownership_by_category.csv` | Parcels, land value, lot area and tax change by category × owner sector |
+| `results/llc_geography_by_category.csv` | Where LLC owners mail, per category, with distinct entity counts |
+| `results/owner_geography_by_category.csv` | Where **all** private owners mail, per category — the baseline |
+| `results/llc_entities.csv` | One row per resolved LLC entity |
+| `results/out_of_state_mail_addresses.csv` | Out-of-state mailing addresses, all property types, for the mail-drop test |
+| `results/universe_reconciliation.csv` | OPA vs L&I vs City Land Use agreement |
+| `results/robustness_opa_vs_lycd.csv` | Headline shares under both land-value models |
+| `results/classifier_validation.csv` | The adjudicated name sample |
+| `results/parking_recarve.csv` | What moved out of which category into surface parking |
+| `figs/` | Five charts |
