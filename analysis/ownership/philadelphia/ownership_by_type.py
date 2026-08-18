@@ -455,6 +455,27 @@ def robustness_table(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values('abs_diff_pp', ascending=False)
 
 
+def spatial_points(df: pd.DataFrame, tax_year: int) -> pd.DataFrame:
+    """Lon/lat for every private headline-category parcel, for the report's map.
+
+    `load_universe` drops geometry because nothing else here needs it; the parcel cache
+    still carries OPA centroids (Point, not lot outlines), so re-read just the geometry
+    and join it back on the same key.
+    """
+    cache = parcel_cache_path(tax_year, REPO / 'cities/philadelphia/data')
+    geom = gpd.read_parquet(cache, columns=['parcel_number', 'geometry']).to_crs(4326)
+    geom['join_key'] = _strip_key(geom['parcel_number'])
+    geom = geom.drop_duplicates('join_key')
+    geom['lon'], geom['lat'] = geom.geometry.x, geom.geometry.y
+
+    sub = df[df['analysis_category'].isin(HEADLINE_CATEGORIES) &
+             (df['owner_sector'] != ol.SECTOR_PUBLIC)]
+    out = (sub[['join_key', 'analysis_category', 'owner_sector', 'legal_form',
+                'owner_geography', 'taxable_land_value']]
+           .merge(geom[['join_key', 'lon', 'lat']], on='join_key', how='inner'))
+    return out[out['lon'].between(-75.4, -74.9) & out['lat'].between(39.8, 40.2)]
+
+
 def run_checks(df: pd.DataFrame, shares: pd.DataFrame, ent: pd.DataFrame) -> list[str]:
     """Guardrails. Returns a list of failure messages (empty = all passed)."""
     fails = []
@@ -642,6 +663,10 @@ def main() -> None:
     geo = llc_geography_table(df)
     all_geo = owner_geography_table(df)
     ent = entity_table(df)
+    # Same table restricted to vacant-land parcels: an entity's row then describes only
+    # its vacant holdings, not its whole portfolio, which is what a report on vacant land
+    # needs. Entities are resolved citywide first so the labels match `llc_entities.csv`.
+    ent_vacant = entity_table(df[df['analysis_category'] == VACANT_CATEGORY])
     robust = robustness_table(df)
     hubs = mail_hub_table(df)
     vp_hubs = mail_hub_table(df, HEADLINE_CATEGORIES)
@@ -656,6 +681,10 @@ def main() -> None:
     geo.to_csv(RESULTS / 'llc_geography_by_category.csv', index=False)
     all_geo.to_csv(RESULTS / 'owner_geography_by_category.csv', index=False)
     ent.to_csv(RESULTS / 'llc_entities.csv', index=False)
+    ent_vacant.to_csv(RESULTS / 'llc_entities_vacant.csv', index=False)
+    pts = spatial_points(df, args.tax_year)
+    pts.to_csv(RESULTS / 'headline_parcel_points.csv', index=False)
+    print(f"  spatial points for the report map: {len(pts):,}")
     robust.to_csv(RESULTS / 'robustness_opa_vs_lycd.csv', index=False)
 
     sample = ol.validate_sample(df['owner_name'], df['legal_form'], n_per_form=35)
