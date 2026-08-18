@@ -271,6 +271,23 @@ area** — a uniform area error cancels completely. Only *mixed* conventions and
 matter. Do not infer from the small headline movement that the area layer is unimportant; it is
 load-bearing for any per-parcel land value and for anything that is not scale-invariant.
 
+**Surface parking is hidden inside "Vacant Land", and only `building_code` separates it.**
+OPA gives most parking lots `category_code = 6`, so the model's Vacant Land category
+contains them. The separator is the `R*` building-code family: `RA` (non-commercial lot),
+`RB` (non-paid commercial), `RE` (paid commercial), `^R[A-F]\d$` (lot with structure), plus
+`^O[AB]\d$` for commercial parking garages. Three traps: `5R` is CONDO PARKING SPACE (~4.5K
+individual deeded spaces, not lots — exclude); `R30`/`R10`/`R5x` are `ROW B/GAR` rowhouses,
+so never match on `R*` alone; and `DD0`/`DE0` are office buildings whose descriptions merely
+mention parking. `building_code` is **not** in the parcel cache — `analysis/ownership/philadelphia/fetch_opa_attributes.py`
+pulls it as a sidecar. See `analysis/ownership/philadelphia/` for the ownership-by-type
+analysis built on it, and note the City's Land Use layer is *not* a usable parking source
+(it identifies ~200 parking parcels citywide against the assessor's ~2,200).
+
+**OPA owner names truncate at two widths, 25 and 40 characters** — the length histogram
+spikes at both. Truncation cuts the legal suffix off (`S&S REALITY INVESTMENTS L`), so any
+LLC/corporation classifier is biased downward in a known direction: entities move *out* of
+the LLC bucket, never into it. Treat every LLC share as a floor.
+
 **`parcels.gpq` row order does NOT match the CSV row order.** Do not join by index. Verified: 480K out of 579K rows differ between `taxable_land` in `parcels.gpq` and `taxable_land_value` in `philadelphia.csv`. Always join on `parcel_id` ↔ `parcel_number` (stripping leading zeros: `parcels['parcel_id'] = parcels['parcel_number'].astype(str).str.lstrip('0').astype('Int64')`).
 
 **`parcels.gpq` geometry is Point (OPA centroids), not polygons.** Its `geometry` column holds one

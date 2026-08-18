@@ -12,14 +12,24 @@ import pandas as pd
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-REPO = Path('C:/projects/LVTShift')
-SCRATCH = Path(__file__).parent
-OUT = SCRATCH / 'ownership_figs'
+HERE = SCRATCH = Path(__file__).parent
+REPO = HERE.parents[2]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(HERE))
+
+import owner_lib as ol  # noqa: E402
+from lvt.philadelphia import parcel_cache_path  # noqa: E402
+
+# The parcel cache and the model export are both keyed by tax year. Reading an unsuffixed
+# `parcels.gpq` (which no longer exists) against an unsuffixed export is exactly the
+# vintage-mixing the year suffix was introduced to prevent.
+TAX_YEAR = 2026
+OUT = HERE / 'figs'
 OUT.mkdir(exist_ok=True)
 
 # Load and join (same as pass 1)
-parcels = gpd.read_parquet(REPO / 'cities/philadelphia/data/parcels.gpq')
-csv = pd.read_csv(REPO / 'analysis/data/philadelphia.csv', low_memory=False)
+parcels = gpd.read_parquet(parcel_cache_path(TAX_YEAR, REPO / 'cities/philadelphia/data'))
+csv = pd.read_csv(REPO / f'analysis/data/philadelphia_ty{TAX_YEAR}.csv', low_memory=False)
 parcels['join_key'] = parcels['parcel_number'].astype(str).str.lstrip('0')
 csv['join_key'] = csv['parcel_id'].astype(str).str.lstrip('0')
 parcels = parcels.drop_duplicates('join_key')
@@ -58,8 +68,10 @@ blank_mail = df['mail_key'].str.startswith('|')
 df.loc[blank_mail, 'mail_key'] = 'SELF ' + norm_addr(df.loc[blank_mail, 'location']) + '|19PHL'
 print(f'Parcels falling back to property address as mail key: {blank_mail.sum():,}')
 
-# Owner classification (legal form), checked in order
-PUBLIC_PATTERNS = [
+# Owner classification now lives in owner_lib so this script, pass 1, and the
+# ownership-by-property-type analysis cannot drift apart. The lists below are kept only as
+# a record of what this script used in July 2026; owner_lib holds the live copy.
+_HISTORICAL_PUBLIC_PATTERNS = [
     'CITY OF PHILA', 'CITY OF PHILADELPHIA', 'PHILADELPHIA LAND BANK', 'LAND BANK',
     'PHILA HOUSING AUTH', 'PHILADELPHIA HOUSING', 'HOUSING AUTHORITY',
     'REDEVELOPMENT AUTH', 'PHILADELPHIA REDEVELOP', 'PHILA REDEVELOPMENT',
@@ -73,14 +85,14 @@ PUBLIC_PATTERNS = [
     'PIDC', 'PHILADELPHIA INDUSTRIAL', 'PENNSYLVANIA ECONOMIC DEV',
     'FAIRMOUNT PARK', 'DEPT OF', 'DEPARTMENT OF', 'AMTRAK', 'NATIONAL RAILROAD',
 ]
-INSTITUTIONAL = [
+_HISTORICAL_INSTITUTIONAL = [
     'UNIVERSITY', 'UNIV ', 'UNIV OF', ' COLLEGE', 'COLLEGE OF', 'HOSPITAL', 'HEALTH SYSTEM',
     'CHURCH', 'BAPTIST', 'CATHOLIC', 'LUTHERAN', 'METHODIST', 'PRESBYTERIAN', 'EPISCOPAL',
     'ISLAMIC', 'MOSQUE', 'MASJID', 'SYNAGOGUE', 'CONGREGATION', 'MINISTR', 'DIOCESE',
     'ARCHDIOCESE', 'CEMETERY', 'FOUNDATION', 'CHARIT', 'ACADEMY', 'SEMINARY',
     'SALVATION ARMY', 'YMCA', 'YWCA', 'CHARTER SCHOOL', 'FRIENDS OF',
 ]
-BUSINESS = [
+_HISTORICAL_BUSINESS = [
     r'\bLLC\b', r'\bL L C\b', r'\bLP\b', r'\bL P\b', r'\bLTD\b', r'\bINC\b', r'\bCORP\b',
     r'\bCOMPANY\b', r'\bCO\b', r'\bPARTNERS\b', r'\bPARTNERSHIP\b', r'\bASSOCIATES\b',
     r'\bASSOC\b', r'\bPROPERTIES\b', r'\bPROPERTY\b', r'\bREALTY\b', r'\bREAL ESTATE\b',
@@ -89,14 +101,7 @@ BUSINESS = [
     r'\bENTERPRISES\b', r'\bBANK\b', r'\bSAVINGS\b', r'\bFCU\b', r'\bHOMES\b',
     r'\bRENTALS\b', r'\bEQUITIES\b', r'\bESTATE OF\b', r'\bAPARTMENTS\b',
 ]
-pub_re = '|'.join(re.escape(p) for p in PUBLIC_PATTERNS)
-inst_re = '|'.join(re.escape(p) for p in INSTITUTIONAL)
-biz_re = '|'.join(BUSINESS)
-
-df['owner_class'] = 'Individual'
-df.loc[df['owner_name'].str.contains(biz_re, regex=True), 'owner_class'] = 'Business / investor entity'
-df.loc[df['owner_name'].str.contains(inst_re, regex=True), 'owner_class'] = 'Institutional / nonprofit'
-df.loc[df['owner_name'].str.contains(pub_re, regex=True), 'owner_class'] = 'Public agency'
+df['owner_class'] = ol.classify_sector(df['owner_name'])
 
 print('\nParcels by owner class:')
 cls = df.groupby('owner_class').agg(
