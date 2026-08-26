@@ -422,6 +422,7 @@ def match_to_census_tracts(
     gdf: gpd.GeoDataFrame,
     tract_gdf: gpd.GeoDataFrame,
     join_type: str = "left",
+    fallback_nearest: bool = False,
 ) -> gpd.GeoDataFrame:
     """
     Match each row in a GeoDataFrame to its corresponding Census Tract via spatial join.
@@ -429,8 +430,13 @@ def match_to_census_tracts(
     Thin, clearly-named wrapper around match_to_census_blockgroups(), which is
     already geometry-agnostic (centroid-based sjoin against whatever polygon set is
     passed) — no tract-specific join logic is needed.
+
+    See match_to_census_blockgroups() for `fallback_nearest`; pass it when parcel values
+    are rolled up to tracts and the total has to survive the roll-up.
     """
-    return match_to_census_blockgroups(gdf, tract_gdf, join_type=join_type)
+    return match_to_census_blockgroups(
+        gdf, tract_gdf, join_type=join_type, fallback_nearest=fallback_nearest
+    )
 
 def aggregate_parcels_to_geography(
     parcels_gdf: gpd.GeoDataFrame,
@@ -681,19 +687,31 @@ def get_census_blockgroups_shapefile(fips_code: str) -> gpd.GeoDataFrame:
 def match_to_census_blockgroups(
     gdf: gpd.GeoDataFrame,
     census_gdf: gpd.GeoDataFrame,
-    join_type: str = "left"
+    join_type: str = "left",
+    fallback_nearest: bool = False,
 ) -> gpd.GeoDataFrame:
     """
     Match each row in a GeoDataFrame to its corresponding Census Block Group using spatial join.
-    
+
     Args:
         gdf (gpd.GeoDataFrame): Input GeoDataFrame to match
         census_gdf (gpd.GeoDataFrame): Census Block Group boundaries GeoDataFrame
         join_type (str): Type of join to perform ('left', 'right', 'inner', 'outer')
-    
+        fallback_nearest (bool): If True, rows whose centroid falls inside no polygon are
+            assigned to the *nearest* one instead of being left unmatched. Default False,
+            which preserves the historical behavior for every existing city model — turning
+            this on by default would silently reassign previously-unmatched parcels and shift
+            published demographic results across all of them.
+
+            Turn it on when downstream code rolls parcel values up to the geography and needs
+            every dollar to land somewhere: a `groupby(geo_col, dropna=False)` followed by a
+            merge onto the boundary frame silently discards the NaN-keyed group, so even a
+            handful of unmatched parcels breaks an adding-up identity. Philadelphia has three
+            such parcels at the river's edge (~$204K of land value against a $43B base).
+
     Returns:
         gpd.GeoDataFrame: Input GeoDataFrame with Census Block Group data appended
-        
+
     Raises:
         TypeError: If inputs are not GeoDataFrames
         ValueError: If join_type is invalid
@@ -729,6 +747,29 @@ def match_to_census_blockgroups(
     # Drop unnecessary columns from the join
     if 'index_right' in joined.columns:
         joined = joined.drop(columns=['index_right'])
+
+    # Assign anything that fell outside every polygon to the nearest one. Only meaningful
+    # for joins that retain unmatched left rows.
+    if fallback_nearest and join_type in ('left', 'outer'):
+        census_cols = [c for c in census_gdf.columns if c != census_gdf.geometry.name]
+        if census_cols:
+            unmatched = joined[census_cols[0]].isna()
+            if unmatched.any():
+                # "Nearest" is only meaningful in a projected CRS — degrees of longitude
+                # are shorter than degrees of latitude away from the equator, so a
+                # geographic-CRS distance can pick the wrong polygon.
+                missing = gdf_centroids.loc[unmatched.values]
+                polygons = census_gdf
+                if getattr(missing.crs, "is_geographic", False):
+                    missing = missing.to_crs("EPSG:3857")
+                    polygons = census_gdf.to_crs("EPSG:3857")
+                nearest = gpd.sjoin_nearest(missing, polygons, how='left')
+                # Equidistant polygons produce one row per tie; keep a single assignment.
+                nearest = nearest[~nearest.index.duplicated(keep='first')]
+                if 'index_right' in nearest.columns:
+                    nearest = nearest.drop(columns=['index_right'])
+                for col in census_cols:
+                    joined.loc[nearest.index, col] = nearest[col]
 
     # Restore original polygon geometries and CRS
     joined.geometry = original_geometry.loc[joined.index].values
