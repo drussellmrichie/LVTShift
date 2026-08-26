@@ -64,7 +64,7 @@ When modifying the pipeline, change the skill files — they are the canonical s
 
 ## Architecture
 
-Six core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
+The core modules live in the `lvt/` package, used from Jupyter notebooks in `cities/`:
 
 ```
 lvt/cloud_utils.py     → Fetch parcel data from county ArcGIS FeatureServers
@@ -72,6 +72,8 @@ lvt/census_utils.py    → Fetch Census demographics, spatial join to parcels
 lvt/lvt_utils.py       → Tax modeling (split-rate, abatement, exemptions) — rate shifts
 lvt/reassessment.py    → Revenue-neutral reassessment — base shifts (single + multi-district, decomposition) + IAAO ratio-study & equity metrics
 lvt/policy_analysis.py → Identify vacant land, parking lots, development barriers
+lvt/wage_tax_utils.py  → Wage-tax-for-land-tax swap — a different instrument, at tract granularity
+lvt/ubi_utils.py       → Full land-rent capture + per-capita dividend — a rent flow, not an assessed stock
 lvt/transit_utils.py   → GTFS feeds, routed walk-shed isochrones, OSM parking analysis
 lvt/viz.py             → Scatter plots, quintile analysis, demographic charts, city report
 lvt/parcel_map.py      → Per-parcel GeoParquet export + self-contained interactive HTML map
@@ -346,6 +348,57 @@ methodology. Key gotchas found while building it:
 - This notebook reads the shared `cities/philadelphia/data/parcels.gpq` cache read-only — it does
   not build or rebuild it. Run `model.ipynb` first if the cache doesn't exist yet.
 
+### Philadelphia — LVT + UBI (full land-rent capture)
+
+`cities/philadelphia/model_lvt_ubi.ipynb` is a sixth Philadelphia notebook and a third modeling
+paradigm: tax 100% of annual land rent, leave the building tax exactly as billed, hold the City and
+School District harmless on the land portion of their current revenue, and pay the residual out as
+an equal per-capita dividend. Module `lvt/ubi_utils.py`, report `lvt.viz.create_lvt_ubi_report`,
+tests `tests/test_ubi_utils.py`, methodology `docs/LVT_UBI_GUIDE.md`. Slug is
+`philadelphia_lvt_ubi_ty<YEAR>` (plus `_lycd`), outside the `analysis/data/philadelphia*.csv`
+convention. Gotchas worth knowing before touching it:
+
+- **It is deliberately not revenue-neutral, so `save_standard_export` and `create_city_report` do
+  not apply.** Raising more than today's levy is the reform. There is no revenue target to solve a
+  millage against — the rate is exogenous — so `lvt/ubi_utils.py` never calls
+  `model_split_rate_tax`. Do not "fix" that by adding a solver.
+- **The gross-up is `(i + t)`, not `i`.** Assessed land value is a market price that already
+  capitalizes today's land tax, so annual site rent is `L * (discount_rate + combined_rate)`. At
+  `i = 5%` that is 28% more rent than `L * i`. `discount_rate` is a *net* cap rate (`r − g`), not a
+  raw discount rate.
+- **`taxable_land` is post-exemption, so the rent basis is a policy choice.** `taxable_land +
+  exempt_land` is the full assessed land; `RENT_BASIS = 'full'` charges rent on it. The clean
+  `tax_change = i * L` identity only holds on the taxable basis, where the rent basis and the
+  current-tax basis are the same column.
+- **This notebook deliberately skips `model.ipynb`'s abated-parcel imputation**
+  (`model_building = 4 × taxable_land`). That exists so a revenue-neutral split-rate solve does not
+  see an artificially land-only parcel; here the reform never touches the improvement base, so
+  current law — a $0 building bill during the abatement — is the correct counterfactual.
+- **The export sign convention inverts versus the wage-tax swap.** There `net_change > 0` means a
+  tract pays more; here `net_gain > 0` means the tract's residents come out ahead, and the map uses
+  `RdYlGn` rather than `RdYlGn_r`. This is why `create_lvt_ubi_report` is a separate function and
+  not `create_wage_tax_swap_report` with renamed columns — a rename would silently invert the maps.
+- **`net_gain` subtracts `tax_change`, not `new_land_tax`.** Held harmless, the taxing bodies keep
+  the land tax the parcel already pays, so counting the whole levy against residents double-counts
+  it. The correct subtrahend makes the reform exactly zero-sum: `sum(net_gain) == 0`, which the
+  notebook asserts.
+- **The capitalization rate sets magnitude, not the winner/loser split.** A tract's net position is
+  `i * (sum(L) * pop_j / P − L_j)`, whose sign does not involve `i`; scaling every land value by a
+  constant scales every net position by the same constant. So `i` and any *uniform* assessment bias
+  are scale knobs — only *non-uniform* assessment error redistributes. Section 9 demonstrates this
+  by asserting the net-positive tract set is identical at 3%, 5% and 9%.
+- **The levy is not a millage.** At 100% capture land value capitalizes to zero, so the ad-valorem
+  base vanishes and OPA would have to assess rental values it does not publish.
+  `implied_land_millage_equivalent` (= `phi*(i+t)*1000`, 64.0 mills at the defaults, against 13.998
+  today and 29.0 under the 4:1 split-rate) is a comparability aid, not an implementable rate.
+- **Reference magnitudes for wiring checks (TY2026, OPA land, `i = 5%`, full capture):**
+  `sum(taxable_land)` ≈ $40–46B, dividend pot ≈ $2.0–2.3B, ≈ $1,250–1,450 per resident, break-even
+  land value ≈ $60–70K against a median rowhome land value near $36K, full-redistribution budget
+  hole ≈ $0.6B. LYCD land runs ~1.26× the OPA base. The notebook asserts these; a failure there is
+  a data-wiring problem, not a formula problem — the arithmetic is proven offline by the 31 tests
+  in `tests/test_ubi_utils.py`.
+- **Rates come from `tax_year_params()`.** Never hardcode 0.013998.
+
 ## Notebooks
 
 Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `.claude/skills/build-notebook.md`:
@@ -362,6 +415,8 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 ## Documentation
 
 - `docs/LVT_MODELING_GUIDE.md` — step-by-step guide for adding a new city
+- `docs/WAGE_TAX_SWAP_GUIDE.md` — methodology for the wage-tax-for-land-tax swap paradigm
+- `docs/LVT_UBI_GUIDE.md` — methodology for the LVT + UBI (full land-rent capture) paradigm
 - `docs/LVT_LEGAL_DECISIONING_GUIDE.md` — legal framework behind the legality-analyzer skill
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 
