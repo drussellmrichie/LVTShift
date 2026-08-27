@@ -423,6 +423,63 @@ convention. Gotchas worth knowing before touching it:
   Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
 - **Rates come from `tax_year_params()`.** Never hardcode 0.013998.
 
+### Philadelphia — Single-Tax Static Ledger
+
+`cities/philadelphia/model_single_tax_ledger.ipynb` is a seventh Philadelphia notebook and the
+Tier-1 answer to "can Philadelphia land rent fund abolishing its taxes on labor and capital?"
+Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
+`docs/SINGLE_TAX_LEDGER_SPEC.md` (which also records the build's deviations). Not audited yet.
+
+- **`kappa` is a swept parameter, not an estimate.** The whole notebook is a break-even
+  calculation: `kappa*` is the uniform share of an abolished tax that would have to reappear
+  as site rent for the bundle to fund itself. Nothing here models a behavioural response.
+  Do not "improve" it by inserting an estimated capitalization rate.
+- **The land tax is absorbed, never abolished.** `T_land` enters Target once for every bundle;
+  `validate_ledger` asserts no bundle contains it. Confusing absorbed with abolished is the
+  single easiest way to get a wrong answer here.
+- **PICA is a separate line and it is big.** The City General Fund wage figure is *not* the
+  wage tax. Full wage-and-earnings burden = City + PICA; at FY2026 that is $2.048B + $0.731B.
+  The older `model_wage_tax_swap.ipynb` figure ($2.4528B) is a different, earlier vintage —
+  do not mix them. PICA revenue services PICA bonds, so stranding it is a real legal
+  constraint on implementation, not just an accounting line.
+- **Use receipts for NPT and BIRT, never rate x base.** Taxpayers credit 60% of BIRT against
+  NPT, so published receipts are already net; recomputing either from a base double-counts.
+- **Ledger vintage is FY2026 QCMR current projection**, chosen to match the TY2026 property
+  modelling rather than the spec's original FY2024 default. `LEDGER_VINTAGE = 'FY2025'` gives
+  actuals as a sensitivity. Two lines (School Income Tax, Use & Occupancy) are `estimate`
+  status and print a loud runtime warning; they appear only in bundles B4/B5.
+- **The property split comes from the OPA run only.** Taking `total_current_land_tax` from a
+  LYCD run would price the baseline off a surface nobody was billed on — the substance of
+  Limitation 19, fixed in PR #30. The notebook reads only `taxable_land_value` from the LYCD
+  export, passes `land_value_col='land_opa'` as the baseline for every case, and sets
+  `baseline_total_col='taxable_total'` so a mis-wired baseline raises instead of passing.
+- **At `kappa = 1` and `phi = 1` every bundle's pot is identical** (`phi*R0 + G - T_land`),
+  because abolishing a tax is exactly self-funding under full ATCOR. Both conditions are
+  load-bearing and an audit caught this stated without them: at `phi = 0.85` the pot spread
+  across bundles is $0.868B, because the residual `-(1-phi)*sum(T)` is bundle-dependent, and
+  the road-rent term `G` is easy to drop from the formula. `dividend_vs_kappa.png` is drawn at
+  `phi = 1` and is correct as plotted. Pinned by
+  `test_atcor_convergence_holds_only_at_full_capture`.
+- **`kappa* > 1` is NOT "impossible".** It means super-ATCOR capitalization is required.
+  Gaffney's EBCOR (Excess Burden Comes Out of Rents) holds that abolishing a *distortionary*
+  tax raises rent by more than the revenue foregone, because the excess burden is recovered
+  too — exactly the taxes this program abolishes. Do not relabel that region "impossible".
+- **Two of the three kappa scenarios have no source and are named `illustrative_*` on
+  purpose.** `illustrative_low` and `illustrative_mid` are sweep placeholders, not estimates;
+  only `atcor` (kappa = 1 by definition) is defensible. They were briefly named
+  "conservative"/"central", which an audit flagged because the exported CSV then presents an
+  invented parameter as a result. `test_unsourced_kappa_scenarios_keep_non_authoritative_names`
+  prevents the rename.
+- **Accrual convention is billed, by decision.** The property lines are TY2026 billed; the QCMR
+  tax lines are collections (several bundling current + prior year). Billed is the default
+  because it keeps the property lines identical to the LVT-UBI model and preserves the B0
+  wiring check, and because it is the conservative direction — it overstates `kappa*`. Pass
+  `collection_rate=DEFAULT_COLLECTION_RATE` (0.9452, from the repo's own TY2026 billed-vs-
+  projection gap) for the collected basis; that moves `kappa*(B3)` from 0.502 to 0.484.
+- **Unlike the LVT-UBI model, `i` is not a pure scale knob here.** There it could not change
+  who wins; here it moves `kappa*`, because the Target side is denominated in tax dollars that
+  do not scale with `i`.
+
 ## Notebooks
 
 Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `.claude/skills/build-notebook.md`:

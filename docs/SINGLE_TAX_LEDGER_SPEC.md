@@ -1,14 +1,61 @@
 # Spec — Philadelphia Single-Tax Static Ledger (Tier 1)
 
-Status: spec, not yet built. Design settled 2026-08-26 (session: LVT-UBI distributional
-analysis → Jacob & Livas extension discussion). Build target: `cities/philadelphia/model_single_tax_ledger.ipynb`
-plus `lvt/single_tax.py` and `tests/test_single_tax.py`.
+Status: **BUILT 2026-08-26.** Design settled the same day (session: LVT-UBI distributional
+analysis → Jacob & Livas extension discussion). Delivered:
+`cities/philadelphia/model_single_tax_ledger.ipynb` (executed), `lvt/single_tax.py`,
+`tests/test_single_tax.py` (39 tests). Outputs:
+`analysis/data/philadelphia_single_tax_ty2026_ledger.csv` (2,880 rows),
+`..._lines.csv`, three charts in `analysis/reports/philadelphia_single_tax/`.
 
-**Build guidance.** The notebook assembly, sweep math, charts and export are bounded work —
-build with Sonnet 5. The one error-prone part is the revenue ledger (Section 3): every line
-must be verified against a primary document per the sourcing rules below, and the overlap
-rules in Section 4 are the traps. Audit the finished notebook with Opus/Fable before quoting
-any κ\* number.
+**Audited 2026-08-26** — `analysis/audits/single_tax_ledger_audit_2026-08-26.md`. Five
+Material and five Advisory findings; all Material findings and A1/A2/A3/A4/A5 were fixed the
+same day. Nothing Blocking; the central B3 result survived every check, and the City-side
+ledger reconciles to QCMR's total tax revenue with a $0 residual.
+
+**Still owed: an INDEPENDENT adversarial pass.** That audit was run by the agent that wrote
+the build, in the same session, so it is a self-check — not the independent verification this
+spec asks for. Re-run `/analysis-audit` with independent subagents or a fresh session before
+quoting any κ* number outside this repo, nominating the audit's M3 (unsourced κ scenarios)
+and M5 (the κ>1 framing) for refutation, since both are judgment calls made by the same
+reasoning that produced the design.
+
+### Deviations taken during the build
+
+1. **Vintage is FY2026 current projection, not the FY2024 actuals this spec defaulted to.**
+   Section 3's own rule is not to mix vintages, and the property lines are TY2026; FY2026 is
+   therefore the consistent choice. The FY2026 Q3 QCMR's Real Property figure ($891,102k)
+   reconciles exactly with `lvt/philadelphia.tax_year_params(2026)`, confirming the match.
+   FY2025 actuals are implemented as a second vintage (`LEDGER_VINTAGE = 'FY2025'`); FY2024
+   was dropped because the QCMR does not carry a FY2024 PICA column.
+2. **PICA is materially larger than this spec assumed.** Section 4.3 guessed "roughly 1.5
+   points" and asked for verification. Verified: PICA is a *separate line* from the City
+   General Fund wage tax, at $731.3M wage + $31.4M NPT (FY2026). The full wage-and-earnings
+   burden is **$2.779B**, not the City-only $2.048B and not the $2.4528B in the older
+   wage-tax-swap notebook. Any bundle containing the wage tax is ~$730M larger than a
+   City-General-Fund-only reading would suggest.
+3. **Parking Tax is $0 in the City General Fund**, not the ~$100M assumed. It left the
+   General Fund after FY2023 (ACFR FY2024 Schedule XIX shows $0 against FY2023's $101,941k)
+   and is absent from FY2026 QCMR Table R-2. Classification ('kept') is unchanged, so this
+   does not affect any κ\*.
+4. **Two lines remain estimates**, flagged loudly at runtime and in `status`: School Income
+   Tax ($60M, a rounded FY2023 floor from a Department of Revenue post) and Business Use &
+   Occupancy ($200M, rounded to the nearest $100M in a City Controller analysis). The School
+   District's own adopted budget is the primary document and was not machine-readable at
+   build time. Both appear only in B4/B5.
+
+### Predictions in Section 8 vs. what was built
+
+| | Predicted | Actual |
+|---|---|---|
+| B0 pot | $2.151B / $1,350 | $2.151B / $1,350 ✓ |
+| B1 at κ=1 | equals B0 | equals B0 ✓ |
+| κ\*(B3, OPA) | 0.4–0.5 | **0.502** (0.467 w/ central road rent) ✓ |
+| κ\*(B3, LYCD, central G) | 0.07–0.15 | **0.177** — modestly above |
+| κ\*(B5, OPA) | ">0.5, likely >1 in pessimistic cells" | **0.628**; >1 in 3 of 1,440 cells, all OPA, all in the (φ=0.85, h=0.15, i=3%) corner ✓ |
+
+The B3/LYCD miss is explained and is the ledger being *more* correct than the prediction: the
+prediction used the wage-tax-swap notebook's $2.45B wage figure, while the verified FY2026
+PICA-inclusive figure is $2.779B — deviation 2 above. No ledger error was found.
 
 ## 1. Question
 
@@ -46,7 +93,11 @@ where:
 - `G` = road/curb rents (congestion + curb pricing), a hand-set scenario input, Section 6.
 - `κ*` is exact because κ enters linearly. Headline table: rows = bundles, columns =
   (surface × rent basis × φ), cells = κ*. `κ* ≤ 0` → pencils statically; `κ* > 1` →
-  impossible even at full ATCOR.
+  requires **super-ATCOR** capitalization. **Corrected 2026-08-26:** this originally read
+  "impossible even at full ATCOR", which is not a defensible bound — Gaffney's EBCOR (Excess
+  Burden Comes Out of Rents) holds that abolishing a distortionary tax raises rent by *more*
+  than the revenue foregone, so κ > 1 is possible for exactly the taxes this program
+  abolishes.
 
 Dividend per capita = Pot / population, where population is **read from the existing tract
 export** (`analysis/data/philadelphia_lvt_ubi_ty2026.csv`, sum of `total_pop`) or recomputed
@@ -116,9 +167,12 @@ Lines (amounts to be sourced at build time; classifications are decided here):
 - **Surfaces:** OPA (`taxable_land` from `parcels_ty2026.gpq`) and LYCD (land values joined
   from `analysis/data/philadelphia_lycd_ty2026.csv` exactly as `model_lvt_ubi.ipynb`
   Section 3 does — same key normalization, same 1.25–1.65 ratio guard). **The ledger uses
-  only the LYCD export's `taxable_land_value` column**, which is unaffected by the known
-  LYCD-baseline defect (Limitation 19, `docs/LVT_UBI_GUIDE.md`); the defective
-  `current_tax`/`tax_change` columns must not be read. Safe to build before that fix lands.
+  only the LYCD export's `taxable_land_value` column**; its `current_tax`/`tax_change`
+  columns must not be read. Limitation 19 (`docs/LVT_UBI_GUIDE.md`) was fixed 2026-08-26 in
+  PR #30, which split `land_value_col` (the baseline, always the assessor's land) from
+  `rent_basis_col` (the surface the rent is priced from) and added `baseline_total_col` to
+  verify the reconstruction against the billed total. The notebook uses that corrected API
+  and passes the guard.
 - **Bases:** `taxable` (default) and `full` (reaching exempt land) as in `ubi_utils` —
   the `full` basis is a sensitivity, flagged as requiring PA exemption-law change.
 - **Rates:** `i ∈ {0.03, 0.04, 0.05, 0.06, 0.07}` (default 0.05); `φ ∈ {0.85, 1.0}`;
