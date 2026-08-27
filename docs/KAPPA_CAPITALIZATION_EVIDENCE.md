@@ -109,7 +109,7 @@ bracketing the marginal case and nothing more.
 | family | low | high | low anchor | high anchor |
 |---|---|---|---|---|
 | `building` | 0.00 | 1.006 | Löffler & Siegloch (2021) | Coste (2024) — Philadelphia |
-| `wage` | 0.25 | 1.00 | Suárez Serrato & Zidar (2016), *transferred* | perfect-mobility ceiling |
+| `wage` | 0.25 | 1.056 | Suárez Serrato & Zidar (2016), *transferred* | Jacob & Livas (2026) — Philadelphia GE counterfactual, open-city ceiling |
 | `other` | 0.25 | 0.30 | Suárez Serrato & Zidar (2016) | Suárez Serrato & Zidar (2016) |
 
 `atcor` remains κ = 1 for every family. That is the definition of
@@ -200,13 +200,99 @@ any bundle containing the property tax (B1, B3, B4, B5).
 
 ## 4. `wage` — Wage & Earnings Tax and Net Profits Tax
 
-**This is the weakest link in the evidence base, and it is also the largest family in
-every bundle from B2 up.** No published study reports the landowner share of a local
-wage or earnings tax. Both bounds are therefore weaker than the `building` ones: the low
-end is transferred from a different instrument and the high end is a theoretical
-ceiling.
+**Still the weakest family, but since 2026-08-28 no longer unanchored at the top.** No
+published study reports the landowner share of a local wage or earnings tax — that
+sentence survives Tier 2. What Tier 2 added is a **model-derived Philadelphia-specific
+anchor** at the high end, replacing the bare theory ceiling. The low end remains
+transferred from a different instrument.
 
-### High bound: 1.00 — the perfect-mobility ceiling
+### High bound: 1.056 — Jacob & Livas (2026), the Tier-2 anchor
+
+Matthew Jacob and René Livas (2026), *Local Taxes and Suburbanization: Evidence from
+Philadelphia's Wage Tax*, Harvard job-market paper, March 9 2026 draft, Table 4.
+<https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6331260>
+
+Their counterfactual is exactly this ledger's B2 experiment: set Philadelphia's wage tax
+to zero and replace the revenue with a land value tax, in a Heblich–Redding–Sturm
+quantitative spatial model run on the actual commuting-zone geography (2018 base year,
+commuting elasticity θ = 6.5 from their own boundary RDD; calibration α = 0.7,
+β_L = 0.59, β_H = 0.10).
+
+**The reconciliation that makes the number usable — their "land value" is an annual
+flow, not an asset stock.** Spec §10 originally recorded their Table 4 land value as a
+fixed-factor *stock* (≈$30B vs OPA's $43B assessed) and deferred the mapping as
+intractable without a value-to-rent bridge. That reading was wrong. Appendix eq. (D.5)
+defines the object as **aggregate annual floorspace payments**,
+`Q_k = q_k(H^R_k + H^L_k) = (1−α)·v_k·R_k + (β_H/β_L)·w_k·L_k` — "total income from the
+ownership of land equals the sum of payments for residential and commercial floor space
+use" — a share of resident income plus a share of the wage bill, per year. Four
+independent checks (run adversarially, 2026-08-28):
+
+1. The model contains **no capitalization step anywhere** — no discount rate, no
+   price-rent ratio, no asset equation. It is static; every published output is a ratio.
+2. Their Arnott–Stiglitz sentence — "if the increase in land values exceeds the foregone
+   wage tax revenue…" — is a Henry-George flow-on-flow test, which their Δ = 1.056
+   clears, barely. Under a stock reading it would fail by an order of magnitude,
+   contradicting their own stated conclusion.
+3. "12.28× revenue supports internal consistency" works as a flow (the revenue-neutral
+   LVT needs 1/12.28 ≈ 8% of annual land income) and fails as a stock (8% of asset value
+   per year exceeds the entire rent yield).
+4. Dimensionally: 0.3 × Philadelphia resident income + (0.10/0.59) × workplace wage bill
+   ≈ $20B/yr against ~$1.8B FY2018 wage revenue ≈ 11× — matching the table's implied
+   observed multiple of 11.22 almost exactly. The stock reading (≥$43B/$1.8B ≈ 24×+)
+   misses by 2–3×.
+
+**The derivation.** Table 4 reports the counterfactual level as a multiple of
+model-implied revenue (V_cf/T_W) and the percent change against observed 2018 (ΔQ/Q_obs),
+so
+
+```
+κ_wage  =  ΔQ / T_W  =  (V_cf/T_W) · (ΔQ/Q_obs) / (1 + ΔQ/Q_obs)
+        =  12.28 × 0.0941 / 1.0941  =  1.056        (col 1)
+        =  12.69 × 0.1312 / 1.1312  =  1.472        (col 2, elastic floorspace)
+        =  13.66 × 0.2175 / 1.2175  =  2.440        (col 3, + agglomeration)
+```
+
+All three columns recover an identical observed baseline multiple (11.224 / 11.218 /
+11.220) — a three-decimal internal-consistency check on this decomposition. **Column 1
+is the bound**: columns 2–3 let floorspace supply respond, so their ΔQ mixes payments to
+*newly built structures* — resource costs, not rent — into the numerator, contaminating
+the site-rent object; and column 3 adds a transferred agglomeration elasticity on top.
+They are reported here as sensitivities, not bounds.
+
+**What conditions the number, in order of importance:**
+
+- **Open city.** "Under the open-city specification, all incidence falls on immobile
+  landlords" — their words. This is the perfect-mobility ceiling *assumed*, so 1.056 is
+  a model-quantified ceiling, not a mid estimate; it lands slightly above ATCOR because
+  the recovered excess burden accrues partly to Philadelphia land (metro-wide welfare
+  +4.44% of metro floorspace payments). With imperfect mobility — Brülhart et al.'s
+  actual point — realised κ falls below it.
+- **Q is floorspace payments, not site rent.** Even in column 1 the flow is quasi-rent
+  to *land plus frozen structures*; a land-only levy on assessed land does not reach the
+  structure component. So 1.056 is an upper bound on the ledger's object even at the
+  ceiling.
+- **Gross of the replacement LVT** — which is exactly right for κ: the pre-capture
+  increment, before φ takes its share.
+- **The commuter-export margin is internal to the model.** The §1(b)/M-5 objection to
+  the SSZ transfer — non-resident commuters' burden falling outside the local land
+  market — is the *identifying mechanism* of this paper, and Philadelphia's land gain is
+  reported separately from the suburbs' (+2.37% col 1; −1.20% col 2, so the suburban
+  redistribution is not even sign-stable). The anchor does not inherit that caveat.
+- **Model units.** The paper feeds Davis et al. (2021) *asset prices* into the model's
+  *rent* slot with no conversion — a genuine units conflation on the input side — but
+  the model is homogeneous of degree one in the joint scale of land values and wages, so
+  the conflation cancels in every published ratio (which is presumably why the
+  normalizer is *model-implied* revenue). κ, being a ratio, is safe; **never convert
+  these results to dollars** without confirming model-implied 2018 revenue against the
+  actual ~$1.8B (rlivas@g.harvard.edu for replication code).
+- **Magnitude posture of the model.** The paper self-reports welfare gains 2.5–7× larger
+  than Fajgelbaum et al. (2019) benchmarks, while its tax-base stock elasticity (0.86)
+  is far *below* Haughwout–Inman (2001)'s (revenue-max rate 54% vs ~4%). The
+  disagreements run in opposite directions; the anchor should move if the published
+  version's Table 4 moves.
+
+### The perfect-mobility ceiling — now the anchor's conditioning assumption
 
 > "With perfect mobility, the incidence of local taxes is fully borne by landowners, the
 > immobile factor."
@@ -215,9 +301,12 @@ Brülhart, Danton, Parchet & Schläpfer (2025), *Who Bears the Burden of Local T
 AEJ: Economic Policy 17(1), 464–505, at p. 468.
 <https://doi.org/10.1257/pol.20220462>
 
-Quoted for what it is — the standard benchmark, and the paper's own contribution is that
-moving is costly so realised incidence falls *below* it. It coincides with `atcor` by
-construction.
+Until Tier 2 this stood as the high bound itself. It is now listed as corroboration
+because it is the assumption *inside* the anchor, not independent evidence: Jacob &
+Livas impose it, and their 1.056 is what it implies quantitatively in Philadelphia's
+geography once the excess-burden recovery is counted. Brülhart et al.'s own
+contribution — that moving is costly, so realised incidence falls below the ceiling —
+is the reason the anchor is a ceiling and not an estimate.
 
 ### Low bound: 0.25 — transferred from Suárez Serrato & Zidar (2016)
 
@@ -314,14 +403,16 @@ The RTT is $356.4M of the `other` family and appears only in B5.
 
 In rough order of leverage:
 
-1. **A landowner-share estimate for a local wage tax.** It is the largest family and the
-   only one with no direct evidence at either end. Stull & Stull (1991) is the nearest
-   published starting point (§4) but reports capitalization rather than a share; the
-   exported-commuter problem in §1(b) means a Philadelphia-specific estimate would have
-   to separate resident from non-resident incidence. The sibling repo
-   `C:/projects/lvt_pass_through_test` is set up on the closest available design (PA
-   split-rate adoptions and rescindments) and would speak to the `building` family
-   directly if it lands.
+1. **An empirical (non-ceiling) κ for the wage family.** Tier 2 anchored the *top* of
+   the band with Jacob & Livas's open-city counterfactual (§4); the whole interior —
+   what realised capitalization looks like under costly mobility — is still spanned only
+   by the transferred SSZ low bound. The highest-value additions now: (a) a
+   costly-mobility variant of the J&L counterfactual (their model with a Brülhart-style
+   moving cost would put a point *inside* the band; replication code:
+   rlivas@g.harvard.edu); (b) Stull & Stull (1991) style capitalization estimates
+   converted to a share. The sibling repo `C:/projects/lvt_pass_through_test` is set up
+   on the closest available design (PA split-rate adoptions and rescindments) and would
+   speak to the `building` family directly if it lands.
 2. **A land/structure decomposition of Coste's abatement premium.** It would convert the
    `building` high bound from an argument into a measurement.
 3. **Anything on whether marginal capitalization rates survive at full capture.** Every

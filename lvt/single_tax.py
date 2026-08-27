@@ -485,6 +485,34 @@ _SSZ_TRANSFERRED_TO_WAGE = KappaSource(
           "reaches non-resident commuters as well, so the transfer is an assumption, "
           "not a measurement. " + _SUAREZ_SERRATO_ZIDAR_2016.note),
 )
+_JACOB_LIVAS_2026 = KappaSource(
+    citation=("Jacob, Matthew and Rene Livas (2026), 'Local Taxes and Suburbanization: "
+              "Evidence from Philadelphia's Wage Tax', Harvard job-market paper, March 9 "
+              "2026 draft, Table 4. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6331260"),
+    value=1.056,
+    basis="model_counterfactual",
+    setting=("Philadelphia's own wage tax, replaced revenue-neutrally by an LVT in a "
+             "quantitative spatial model (Heblich-Redding-Sturm base) on the actual "
+             "commuting-zone geography, 2018 base year"),
+    directness="direct",
+    note=("THE TIER-2 ANCHOR (2026-08-28; derivation in docs/KAPPA_CAPITALIZATION_"
+          "EVIDENCE.md section 4). Their Table 4 'land value' is an annual FLOW -- "
+          "aggregate floorspace payments Q_k = q_k(H_R + H_L), eq. (D.5) -- NOT an asset "
+          "stock, so kappa maps flow-on-flow with no discount-rate bridge: "
+          "Delta_Q/T_W = 12.28 x 0.0941/1.0941 = 1.056 in the inelastic-floorspace, "
+          "no-agglomeration column; 1.47 with elastic floorspace and 2.44 adding "
+          "agglomeration, but those columns mix payments to newly built structures into "
+          "Delta_Q, contaminating the site-rent object. Conditional on an OPEN CITY -- "
+          "'all incidence falls on immobile landlords', the perfect-mobility ceiling -- "
+          "so read it as a model-quantified ceiling, not a mid estimate. Reported gross "
+          "of the replacement LVT, which is exactly the pre-capture increment kappa "
+          "wants. The non-resident commuter margin that undermines the SSZ transfer is "
+          "INTERNAL to their model (it is the identifying mechanism), and Philadelphia's "
+          "gain is reported separately from the suburbs'. Q is floorspace payments, not "
+          "site rent, so even at the ceiling this overstates what a land-only levy "
+          "reaches. The ratio is exact in model units; never convert it to dollars "
+          "without confirming model-implied 2018 revenue against the actual ~$1.8B."),
+)
 _PERFECT_MOBILITY = KappaSource(
     citation=("Brulhart, Marius, Jayson Danton, Raphael Parchet and Jorg Schlapfer "
               "(2025), 'Who Bears the Burden of Local Taxes?', American Economic "
@@ -583,18 +611,21 @@ KAPPA_BOUNDS: Dict[str, KappaBound] = {
     "wage": KappaBound(
         family="wage",
         low=0.25,
-        high=1.0,
+        high=1.056,
         low_source=_SSZ_TRANSFERRED_TO_WAGE,
-        high_source=_PERFECT_MOBILITY,
-        corroborating=(_BRULHART_2025, _BASTEN_2017, _ALBOUY_2009),
-        note=("WEAKEST LINK IN THE EVIDENCE BASE. No published study reports the "
-              "landowner share of a local wage or earnings tax. The low bound is "
-              "TRANSFERRED from the corporate-tax setting -- the nearest structural "
-              "estimate of a mobile-base subfederal tax -- and the high bound is the "
-              "perfect-mobility ceiling, not an estimate. The corroborating entries "
-              "establish that local income taxes do capitalize with the expected sign "
-              "and a non-trivial magnitude; none of them pins a revenue share. This is "
-              "also the largest family in every bundle from B2 up."),
+        high_source=_JACOB_LIVAS_2026,
+        corroborating=(_PERFECT_MOBILITY, _BRULHART_2025, _BASTEN_2017, _ALBOUY_2009),
+        note=("Still the weakest family, but no longer unanchored at the top: the high "
+              "bound is Jacob & Livas's GE counterfactual for THIS tax in THIS city -- a "
+              "model-quantified version of the perfect-mobility ceiling (which moves to "
+              "the corroborating list as the anchor's conditioning assumption, not "
+              "independent evidence). It sits just above ATCOR because the recovered "
+              "excess burden accrues partly to Philadelphia land. The low bound remains "
+              "TRANSFERRED from the corporate-tax setting, and the exported-commuter "
+              "caveat on it stands -- though note the anchor internalises that margin. "
+              "The remaining corroborating entries establish sign and magnitude of "
+              "local-income-tax capitalization; none pins a revenue share. Largest "
+              "family in every bundle from B2 up."),
     ),
     "other": KappaBound(
         family="other",

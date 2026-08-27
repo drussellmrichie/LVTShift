@@ -422,7 +422,8 @@ def test_every_kappa_bound_carries_a_citation_with_a_locator():
             assert ("http" in src.citation or "doi.org" in src.citation), (
                 f"{fam}/{edge} citation has no resolvable locator")
             assert src.basis in {"capitalization_rate",
-                                 "landowner_incidence_share", "theory"}
+                                 "landowner_incidence_share", "theory",
+                                 "model_counterfactual"}
             assert src.directness in {"direct", "transferred"}
         assert b.low <= b.high
 
@@ -439,8 +440,16 @@ def test_published_values_match_the_evidence_doc():
     assert b["building"].low == 0.0
     # Suarez Serrato & Zidar (2016): landowners 25-30%.
     assert (b["other"].low, b["other"].high) == (0.25, 0.30)
-    # Perfect-mobility ceiling, which coincides with ATCOR by construction.
-    assert b["wage"].high == 1.0 and b["wage"].high_source.basis == "theory"
+    # Jacob & Livas (2026) Table 4, col 1: Delta_Q/T_W = 12.28*0.0941/1.0941, the
+    # Tier-2 anchor. Open-city GE counterfactual for this exact tax and city -- a
+    # model-quantified ceiling, deliberately above the atcor scenario's 1.0 because the
+    # recovered excess burden accrues partly to Philadelphia land.
+    assert b["wage"].high == pytest.approx(12.28 * 0.0941 / 1.0941, abs=5e-4)
+    assert b["wage"].high == 1.056
+    assert b["wage"].high_source.basis == "model_counterfactual"
+    # The perfect-mobility ceiling is now the anchor's conditioning assumption, kept in
+    # the corroborating list rather than standing as the bound itself.
+    assert any(c.basis == "theory" for c in b["wage"].corroborating)
 
 
 def test_transferred_kappa_bounds_say_so():

@@ -335,12 +335,21 @@ Headline figures are quoted at `h = 0` and are unchanged.
 
 ## 10. Out of scope (Tier 2+), recorded so nobody "helpfully" adds them
 
-- **Anchoring κ_W to Jacob & Livas (2026).** Deliberately deferred: their Table 4 "land
-  value" is the model's fixed-factor value (counterfactual value = 12.28× wage-tax revenue
-  ≈ $30B, ≠ OPA's $43B assessed land), reported gross of the replacement LVT, under an
-  open-city assumption. Mapping their +9.4–21.8% land-value counterfactual into this
-  ledger's κ requires reconciling those objects — a Tier-2 task with their model in hand,
-  not a constant to eyeball into Tier 1.
+- **Anchoring κ_W to Jacob & Livas (2026) — DONE, 2026-08-28 (Tier 2).** This bullet
+  originally read their Table 4 "land value" as a fixed-factor *stock* (≈$30B vs OPA's
+  $43B assessed) and deferred the mapping as needing a value-to-rent bridge. That
+  reading was wrong: their eq. (D.5) defines it as **annual floorspace payments** — a
+  flow — so κ maps flow-on-flow with no discount rate at all:
+  κ_W = 12.28 × 0.0941/1.0941 = **1.056** (inelastic-floorspace column; 1.47/2.44 under
+  elastic floorspace/agglomeration, contaminated by structure-quantity payments). The
+  flow determination was verified adversarially (four independent checks, including a
+  dimensional test the stock reading fails by 2–3×). Now the wage family's high bound in
+  `KAPPA_BOUNDS`, conditional on their open-city assumption — a model-quantified
+  ceiling, sitting just above ATCOR because recovered excess burden accrues partly to
+  Philadelphia land. Full derivation and conditions:
+  `docs/KAPPA_CAPITALIZATION_EVIDENCE.md` §4. Still Tier 2+: a costly-mobility variant
+  of their model (a point *inside* the band), and anything needing their replication
+  code.
 - Any behavioral response, migration, agglomeration, or the dividend-in-utility question.
 - Realistic congestion/curb revenue modeling (network or occupancy data).
 - Zoning counterfactuals (Gyourko–Krimmel anchoring or QSM supply elasticities).
