@@ -31,10 +31,34 @@ each needs a stated bridge to κ.
 **(a) Capitalization rate** — the share of the present value of a tax change that shows
 up in the asset price. Structures are reproducible and supplied at construction cost,
 so once supply has adjusted, a fully capitalized change in a tax on structures accrues
-to the factor that cannot be reproduced: the site. A capitalization rate therefore maps
-to κ more or less directly, *provided* the estimate is for a tax on structures and the
-adjustment horizon is long enough. The weak point is that these studies measure
-capitalization into the whole property price and do not decompose land from structure.
+to the factor that cannot be reproduced: the site.
+
+The bridge to κ needs one line of algebra, not a hand-wave (added 2026-08-27, audit
+A-4). Let a study report `c = ΔP / PV_d(T)`, the price change per unit of present value
+computed at the study's discount rate `d`. The ledger's rent object is `R = L·(i+t)`, so
+a land-price increment scores as `ΔR = ΔL·(i+t)`, and
+
+```
+κ  =  ΔR / T  =  c · (i + t) / d
+```
+
+**κ = c holds exactly iff `d = i + t`** — iff the study's PV convention matches the gross
+rate the ledger uses to turn price back into rent. That is the internally consistent
+case: in `P = R/(i+τ)`, removing a land-borne tax raises the flow by `T` and the price by
+`T/(i+t)`, so full capitalization against a gross-rate PV is `c = 1` and `κ = 1`.
+
+Coste computes his theoretical premium at `r − g` (the ledger's `i`, not `i + t`) over a
+*finite* 10-year stream, where the wedge is of order `t × duration` ≈ 7–10% rather than
+the perpetuity factor `(i+t)/i ≈ 1.28` at `i = 5%`, `t = 1.3998%`. So κ ≈ c is a
+reasonable bridge for Coste specifically, and the omitted terms run **upward** for κ —
+using κ = c understates. The interaction with the ledger's own gross-up does not break
+anything: `t` is absorbed rather than abolished, so it survives every bundle unchanged,
+and baseline rent is priced off pre-reform `L` with `κ·T` added as a separate increment,
+so nothing is double-counted. The un-modelled piece is only that the increment is not
+itself grossed up — again conservative.
+
+The remaining weak point is that these studies measure capitalization into the whole
+property price and do not decompose land from structure.
 
 **(b) Landowner incidence share (θ)** — the share of the tax *burden* borne by
 landowners. Here
@@ -44,11 +68,33 @@ landowners. Here
 ```
 
 and `burden ≥ revenue` for any distortionary tax, because the burden includes the
-excess burden. Setting `κ = θ` therefore **understates** κ. That is the conservative
-direction for this model: it understates the pot and the dividend, never the reverse.
-The gap between θ and κ is precisely Gaffney's EBCOR claim — that abolishing a
-distortionary tax raises rent by more than the revenue foregone — which is why
-`κ > 1` is admissible here and why one of the bounds below sits above 1.
+excess burden. Setting `κ = θ` therefore **understates** κ — the conservative direction
+for this model, since it understates the pot and the dividend. The gap between θ and κ is
+precisely Gaffney's EBCOR claim — that abolishing a distortionary tax raises rent by more
+than the revenue foregone — which is why `κ > 1` is admissible here.
+
+**Two premises this step needs, and one place it fails** (added 2026-08-27, audit M-5).
+The inequality requires the landowner burden share to manifest *entirely* as a change in
+local annual site rent. Where part of it accrues through channels a land-rent levy cannot
+reach — owner-occupier amenity value, or gains to landowners in their capacity as workers
+or firm owners, already counted in another family — κ falls below `θ·(burden/revenue)`
+and the floor can fail.
+
+It fails concretely for the wage family. Philadelphia's Wage Tax reaches **non-resident
+commuters** at 3.44%, and revenue collected from them is burden borne substantially
+outside the local land market: abolishing it forgoes that revenue while local rents
+respond only through location margins. The SSZ θ transferred in §4 is a share of a
+*local* welfare change in a model with no exported-commuter base, so for the exported
+slice κ can sit below θ-based reasoning even with `burden ≥ revenue`. An earlier version
+of this section said "never the reverse"; that is stronger than the algebra supports, and
+the direction of the error is against the conservative claim rather than with it.
+
+**How attainable is κ > 1?** More demanding than "not impossible" suggests. It needs
+`θ·(1 + MEB/revenue) > 1`. With the landowner shares sourced below (0.25–0.30) and
+mainstream marginal-excess-burden estimates of roughly 12–56 cents per dollar
+(Ballard–Shoven–Whalley 1985 and the literature after it), that requires θ of about
+0.64–0.81 — reachable only near the perfect-mobility ceiling, which is a benchmark and
+not an estimate. `building`'s upper bound sits above 1, but see §3: its CI spans 1.0.
 
 **What none of this covers.** Every estimate below is a *marginal* one: a small change
 in a tax that continues to exist. The program this ledger prices is the abolition of
@@ -95,7 +141,10 @@ unabated properties entitled to identical city services.
   site.
 
 This is the single most relevant estimate available to this model: same city, same tax,
-and the same abatement `model_post_abatement.ipynb` already handles. **Caveat:** it
+and the same abatement `model_post_abatement.ipynb` already handles. **Housekeeping:**
+FHFA's page records that a revised version was accepted at *Real Estate Economics*;
+these bounds cite the working paper, so the published version's numbers should be checked
+against them when it appears (noted 2026-08-27, audit A-3). **Caveat:** it
 measures capitalization into the whole home price. Attributing that premium to the site
 relies on structures being supplied elastically at construction cost, which is the
 standard argument but is an argument, not a measurement.
@@ -116,6 +165,12 @@ Max Löffler and Sebastian Siegloch, *Welfare Effects of Property Taxation*, IZA
 
 Landowners end up bearing approximately none of it, which is θ ≈ 0.
 
+**θ ≈ 0 is an inference, not a reported statistic** (noted 2026-08-27, audit A-3). The
+paper reports pass-through to gross rents, reverting net rents, and null medium-run
+effects on *offered* sale prices — the outcome the paper itself flags as its weaker one.
+Reading a landowner share off those three facts is reasonable and is what this bound
+does, but no number in the paper says 0.
+
 **Caveat that cuts against taking this at face value here:** the German Grundsteuer runs
 on a frozen 1964/1935 assessment base, so it is closer to a per-property lump sum than
 to a US ad valorem tax on structures, and their headline outcome is the rental market
@@ -124,7 +179,7 @@ rather than the land market.
 ### Corroborating
 
 Xueying Lyu (2024), *Revisiting property tax capitalization*, Regional Science and Urban
-Economics 108. <https://doi.org/10.1016/j.regsciurbeco.2024.104028> — Shanghai
+Economics 108. <https://doi.org/10.1016/j.regsciurbeco.2024.104039> — Shanghai
 progressive property-tax pilot, DiD: a 0.2pp higher marginal rate produces a ~2.73%
 price fall, implying **at least 71%** of expected liabilities capitalized within a year.
 Reported as a floor.
@@ -197,6 +252,22 @@ setting, which none of them reports.
   wage-tax wedge in high-wage cities: **land prices −21%** against **housing prices
   −5%**. Direct evidence that a tax on wages lands disproportionately on land, but it is
   federal rather than local and is reported as price levels, so it pins no share.
+- **Stull & Stull (1991)**, *Capitalization of local income taxes*, Journal of Urban
+  Economics 29(2), 182–190.
+  <https://ideas.repec.org/a/eee/juecon/v29y1991i2p182-190.html> — capitalization of
+  local income taxes into house values in the **Philadelphia** suburban setting: the
+  same instrument family, in this model's own metro. Added 2026-08-27 (audit A-4) after
+  an independent pass found this section's corroboration was entirely Swiss and federal
+  while a Philadelphia-area study of the exact instrument existed. It reports
+  capitalization into values rather than a landowner share, so it does not overturn the
+  "no published share" statement above — but it is the closest published evidence to
+  what this family actually needs, and anyone revisiting these bounds should start here.
+- **Haughwout, Inman, Craig & Luce (2004)**, *Local Revenue Hills: Evidence from Four
+  U.S. Cities*, Review of Economics and Statistics 86(2) — direct estimates of
+  Philadelphia's wage-tax base elasticity, placing the city near the top of its revenue
+  hill. That is empirical support for the `burden ≥ revenue` premise §1(b) rests on:
+  this specific tax carries large excess burden, so its abolition recovers more than the
+  revenue line.
 
 ---
 
@@ -244,7 +315,10 @@ The RTT is $356.4M of the `other` family and appears only in B5.
 In rough order of leverage:
 
 1. **A landowner-share estimate for a local wage tax.** It is the largest family and the
-   only one with no direct evidence at either end. The sibling repo
+   only one with no direct evidence at either end. Stull & Stull (1991) is the nearest
+   published starting point (§4) but reports capitalization rather than a share; the
+   exported-commuter problem in §1(b) means a Philadelphia-specific estimate would have
+   to separate resident from non-resident incidence. The sibling repo
    `C:/projects/lvt_pass_through_test` is set up on the closest available design (PA
    split-rate adoptions and rescindments) and would speak to the `building` family
    directly if it lands.
