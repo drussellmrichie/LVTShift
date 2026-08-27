@@ -394,9 +394,23 @@ convention. Gotchas worth knowing before touching it:
 - **Reference magnitudes for wiring checks (TY2026, OPA land, `i = 5%`, full capture):**
   `sum(taxable_land)` ≈ $40–46B, dividend pot ≈ $2.0–2.3B, ≈ $1,250–1,450 per resident, break-even
   land value ≈ $60–70K against a median rowhome land value near $36K, full-redistribution budget
-  hole ≈ $0.6B. LYCD land runs ~1.26× the OPA base. The notebook asserts these; a failure there is
+  hole ≈ $0.6B. LYCD land runs ~1.46× the OPA base ($62.6B vs $43.0B at TY2026; 1.375× in the
+  original TY2024 export). Do **not** derive that ratio from the two models' split-rate land
+  millages (29.001 OPA vs 23.076 LYCD): revenue neutrality at 4:1 makes millage vary as
+  `4000*T/(4L+B)`, so the millage ratio is `(4*L_lycd+B_lycd)/(4*L_opa+B_opa)` = 1.257, a
+  different quantity. A ~1.26 land-base band was written into the notebook from exactly that
+  mis-derivation and rejected a correct LYCD run. The notebook asserts these; a failure there is
   a data-wiring problem, not a formula problem — the arithmetic is proven offline by the 31 tests
   in `tests/test_ubi_utils.py`.
+- **KNOWN DEFECT in the `LAND_VALUE_SOURCE = 'lycd'` path: its baseline is not the actual bill.**
+  The reform math rebuilds current tax as `t * (model_land + taxable_building)` — LYCD land
+  against the OPA building — but LYCD replaces land without re-deriving building, so that total
+  is not the OPA assessment and the modeled baseline overshoots the real levy. Neither guard
+  catches it: Section 5's revenue check runs on `taxable_total` (pure OPA), and the zero-sum
+  check is internally consistent with the same wrong baseline. So the `current_tax`/`tax_change`
+  columns of `philadelphia_lvt_ubi_lycd_ty<YEAR>_parcels.csv` are not quotable per parcel;
+  tract-level conclusions do survive. The OPA path is unaffected by construction. Magnitudes,
+  measured impact and the fix: Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
 - **Rates come from `tax_year_params()`.** Never hardcode 0.013998.
 
 ## Notebooks
