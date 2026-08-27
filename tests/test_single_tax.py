@@ -15,10 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lvt.single_tax import (  # noqa: E402
     BUNDLES,
     DEFAULT_COLLECTION_RATE,
+    G_COMPONENTS,
+    KAPPA_BOUNDS,
     KAPPA_SCENARIOS_UNSOURCED,
     G_SCENARIOS,
     KAPPA_SCENARIOS,
     LedgerLine,
+    kappa_bounds_frame,
+    road_rent_frame,
     build_ledger,
     bundle_amounts,
     kappa_star,
@@ -364,8 +368,10 @@ def test_road_rent_lowers_kappa_star(lines, r0_cases):
 
 
 def test_unsourced_kappa_scenarios_keep_non_authoritative_names():
-    """An audit (2026-08-26) flagged 'conservative'/'central' as invented parameters
-    dressed as findings in the exported CSV. Names must stay illustrative_*."""
+    """An audit (2026-08-26, M3) flagged 'conservative'/'central' as invented parameters
+    dressed as findings in the exported CSV. The disposition taken on 2026-08-27 was to
+    source them instead of renaming them, so this list should now be empty -- but the
+    rule stays enforceable if a bare scenario is ever added back."""
     assert set(KAPPA_SCENARIOS_UNSOURCED) <= set(KAPPA_SCENARIOS)
     for name in KAPPA_SCENARIOS_UNSOURCED:
         assert name.startswith("illustrative_"), (
@@ -376,9 +382,84 @@ def test_unsourced_kappa_scenarios_keep_non_authoritative_names():
     assert all(v == 1.0 for v in kappa_vector("atcor").values())
 
 
+def test_every_kappa_scenario_value_traces_to_a_bound():
+    """The M3 fix: no number reaches a pot_/dividend_ column without a citation."""
+    for scenario, vec in KAPPA_SCENARIOS.items():
+        assert set(vec) == set(KAPPA_BOUNDS)
+        for fam, v in vec.items():
+            b = KAPPA_BOUNDS[fam]
+            if scenario == "atcor":
+                assert v == 1.0          # definitional, not an estimate
+            else:
+                assert v in (b.low, b.high), (
+                    f"{scenario}/{fam} = {v} matches neither published bound "
+                    f"({b.low}, {b.high}); every swept kappa must be traceable")
+
+
+def test_every_kappa_bound_carries_a_citation_with_a_locator():
+    for fam, b in KAPPA_BOUNDS.items():
+        for edge, src in (("low", b.low_source), ("high", b.high_source)):
+            assert len(src.citation) > 40, f"{fam}/{edge} citation is too thin"
+            assert ("http" in src.citation or "doi.org" in src.citation), (
+                f"{fam}/{edge} citation has no resolvable locator")
+            assert src.basis in {"capitalization_rate",
+                                 "landowner_incidence_share", "theory"}
+            assert src.directness in {"direct", "transferred"}
+        assert b.low <= b.high
+
+
+def test_published_values_match_the_evidence_doc():
+    """Pin the numbers docs/KAPPA_CAPITALIZATION_EVIDENCE.md quotes from each paper, so
+    the doc and the model cannot drift apart silently. Change these only alongside a
+    re-read of the source."""
+    b = KAPPA_BOUNDS
+    # Coste (2024): 100.6% initial capitalization of Philadelphia's abatement.
+    assert b["building"].high == 1.006
+    assert b["building"].high_source.value == 1.006
+    # Loffler & Siegloch (2021): landowners bear ~none of it in the medium run.
+    assert b["building"].low == 0.0
+    # Suarez Serrato & Zidar (2016): landowners 25-30%.
+    assert (b["other"].low, b["other"].high) == (0.25, 0.30)
+    # Perfect-mobility ceiling, which coincides with ATCOR by construction.
+    assert b["wage"].high == 1.0 and b["wage"].high_source.basis == "theory"
+
+
+def test_transferred_kappa_bounds_say_so():
+    """The wage family has no direct estimate. That must be visible in the export, not
+    buried in a comment -- it is the weakest link and the largest family."""
+    df = kappa_bounds_frame()
+    wage_low = df[(df.family == "wage") & (df.edge == "low")].iloc[0]
+    assert wage_low["directness"] == "transferred"
+    assert "NOT a wage tax" in wage_low["setting"]
+
+
 def test_kappa_scenarios_are_ordered():
-    c, m, a = (kappa_vector("illustrative_low"), kappa_vector("illustrative_mid"),
-               kappa_vector("atcor"))
+    lo, hi, a = (kappa_vector("lit_low"), kappa_vector("lit_high"),
+                 kappa_vector("atcor"))
     for fam in ("building", "wage", "other"):
-        assert c[fam] < m[fam] < a[fam]
-        assert 0.0 <= c[fam] <= 1.0 and a[fam] == 1.0
+        assert lo[fam] < hi[fam]
+        assert 0.0 <= lo[fam] <= 1.0 and a[fam] == 1.0
+    # Deliberate: the Philadelphia capitalization estimate is 100.6%, above ATCOR.
+    # kappa > 1 is EBCOR territory, not an error -- do not clamp this to 1.0.
+    assert hi["building"] > a["building"]
+
+
+def test_road_rent_components_sum_to_the_g_levels():
+    for level, comps in G_COMPONENTS.items():
+        assert G_SCENARIOS[level] == pytest.approx(sum(c.amount for c in comps))
+    assert G_SCENARIOS["none"] == 0.0
+    assert G_SCENARIOS["central"] < G_SCENARIOS["high"]
+
+
+def test_road_rent_is_sourced_and_never_claims_to_be_verified():
+    """G comes from an unaudited-for-this-purpose sibling model. It may not be dressed
+    up as a verified figure, and the excluded curb line must stay visible."""
+    df = road_rent_frame()
+    assert set(df["status"]) <= {"modeled_sibling", "estimate", "excluded"}
+    assert "verified" not in set(df["status"])
+    for _, r in df.iterrows():
+        assert len(r["source"]) > 40 and r["retrieved"]
+    curb = df[df["key"] == "curb_pricing"]
+    assert len(curb) == 1 and curb.iloc[0]["amount"] == 0.0, (
+        "the curb line is carried at zero on purpose; an omission nobody can see "
+        "reads as an omission nobody made")

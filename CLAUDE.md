@@ -416,7 +416,15 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
 - **`kappa` is a swept parameter, not an estimate.** The whole notebook is a break-even
   calculation: `kappa*` is the uniform share of an abolished tax that would have to reappear
   as site rent for the bundle to fund itself. Nothing here models a behavioural response.
-  Do not "improve" it by inserting an estimated capitalization rate.
+  Do not "improve" it by inserting an estimated capitalization rate. Since 2026-08-27 each
+  family *is* bracketed by published estimates (`KAPPA_BOUNDS`, evidence in
+  `docs/KAPPA_CAPITALIZATION_EVIDENCE.md`), but those feed only the `pot_`/`dividend_`
+  columns — `kappa*` still depends on no assumed `kappa`. Two things to know before quoting
+  them: the `building` band is `[0.000, 1.006]` because the two best-identified studies
+  flatly disagree (German pass-through to tenants vs. Coste's 100.6% on Philadelphia's own
+  abatement), and the `wage` family — the largest in every bundle from B2 up — has **no
+  direct estimate at either end**, its low bound being transferred from a corporate-tax
+  study.
 - **The land tax is absorbed, never abolished.** `T_land` enters Target once for every bundle;
   `validate_ledger` asserts no bundle contains it. Confusing absorbed with abolished is the
   single easiest way to get a wrong answer here.
@@ -436,6 +444,17 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
   `taxable_land_value` from the LYCD export, passes `land_value_col='land_opa'` as the baseline
   for every case, and sets `baseline_total_col='taxable_total'` — see the LVT-UBI baseline rule
   above.
+- **Road/curb rent `G` is net-new, sourced, and the curb component is deliberately zero.**
+  The levels come from `philly-cordon-pricing` run artifacts (p50 net revenue: central
+  $83.7M at $9/entry, high $175.3M at $25/entry), read from committed JSON rather than that
+  repo's prose — its own audit found hand-quoted revenue figures 36-44% adrift from its
+  runs. Status is `modeled_sibling`, never `verified`. Curb is excluded because Act 84 of
+  2012 already routes a $35M/yr minimum PPA on-street payment to the City General Fund and
+  the residual to the School District: counting gross curb revenue as new supply lets the
+  same dollar fund today's spending and the abolition. Only the increment from efficient
+  pricing would be net-new and nobody has estimated it. `road_rent_frame()` prints the
+  excluded line so the omission stays visible.
+
 - **The ATCOR convergence result needs both `kappa = 1` and `phi = 1`.** Then every bundle's pot
   is `phi*R0 + G - T_land`. At `phi < 1` the residual `-(1-phi)*sum(T)` is bundle-dependent and
   they diverge; the road-rent term `G` is also easy to drop from the formula. Pinned by
@@ -444,10 +463,12 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
   Gaffney's EBCOR (Excess Burden Comes Out of Rents) holds that abolishing a *distortionary*
   tax raises rent by more than the revenue foregone, because the excess burden is recovered
   too — exactly the taxes this program abolishes. Do not relabel that region "impossible".
-- **Two of the three kappa scenarios have no source and are named `illustrative_*` on purpose** —
-  only `atcor` (kappa = 1 by definition) is defensible. Naming them authoritatively makes the
-  exported CSV present an invented parameter as a result;
-  `test_unsourced_kappa_scenarios_keep_non_authoritative_names` prevents the rename.
+- **The kappa scenarios are `lit_low` / `lit_high` / `atcor`, and every value traces to a
+  citation.** This replaced `illustrative_low`/`illustrative_mid`, which had no source
+  (audit finding M3) — so the exported column names changed too. `test_every_kappa_scenario_value_traces_to_a_bound`
+  and `test_published_values_match_the_evidence_doc` keep the code and the evidence doc from
+  drifting apart. `test_transferred_kappa_bounds_say_so` keeps the wage family's transferred
+  provenance visible in the export rather than buried in a comment.
 - **Accrual convention is billed, by decision.** Property lines are billed; QCMR tax lines are
   collections (several bundling current + prior year). Billed keeps the property lines identical
   to the LVT-UBI model, preserves the B0 wiring check, and is the conservative direction — it
@@ -476,6 +497,9 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 - `docs/LVT_UBI_GUIDE.md` — methodology for the LVT + UBI (full land-rent capture) paradigm
 - `docs/LVT_LEGAL_DECISIONING_GUIDE.md` — legal framework behind the legality-analyzer skill
 - `docs/SINGLE_TAX_LEDGER_SPEC.md` — spec for the single-tax static ledger, plus its build deviations
+- `docs/KAPPA_CAPITALIZATION_EVIDENCE.md` — published capitalization/incidence estimates
+  behind the single-tax model's `kappa` bounds, and the mapping from what the literature
+  measures to what the ledger needs
 - `docs/WASHINGTON_DC_VACANT_LAND.md` — why DC's Class 3/4 regime reaches idle buildings, not idle land
 - `docs/VACANT_LAND_VALUATION.md` — sales-based test of the OPA vs LYCD land surfaces on vacant
   land: LYCD over-values it, OPA under-values it, and both are severely dispersed

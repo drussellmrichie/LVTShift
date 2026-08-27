@@ -12,6 +12,17 @@ Material and five Advisory findings; all Material findings and A1/A2/A3/A4/A5 we
 same day. Nothing Blocking; the central B3 result survived every check, and the City-side
 ledger reconciles to QCMR's total tax revenue with a $0 residual.
 
+**Update 2026-08-27 — M3 closed by sourcing, not renaming.** The three named kappa
+scenarios now derive from `KAPPA_BOUNDS`, each end a published estimate with a citation;
+`illustrative_low`/`illustrative_mid` are replaced by `lit_low`/`lit_high`, so the export's
+`pot_*` / `dividend_*` columns change name. Evidence base and the mapping from published
+estimates to kappa: `docs/KAPPA_CAPITALIZATION_EVIDENCE.md`. The same pass replaced the
+hand-set road/curb rents (Section 6). Headline kappa* at `G = 0` is unchanged (B3/OPA
+0.502, B3/LYCD 0.212); at central road rent it rises slightly because G fell from $150M to
+$83.7M — B3/OPA 0.467 -> **0.483**, B3/LYCD 0.177 -> **0.192**. M5's kappa>1 framing is now
+demonstrated rather than argued: the Philadelphia capitalization estimate is 100.6%, so at
+`lit_high` the B1 dividend exceeds B0's.
+
 **Still owed: an INDEPENDENT adversarial pass.** That audit was run by the agent that wrote
 the build, in the same session, so it is a self-check — not the independent verification this
 spec asks for. Re-run `/analysis-audit` with independent subagents or a fresh session before
@@ -90,7 +101,12 @@ where:
   and never in any abolition bundle (assert this).
 - `κ_j ∈ [0,1]` = fraction of abolished tax `j` that reappears as site rent. Applied
   linearly; capture `φ` applies to the increment too (it is site rent like any other).
-- `G` = road/curb rents (congestion + curb pricing), a hand-set scenario input, Section 6.
+  Still a swept parameter, but since 2026-08-27 each family is bracketed by published
+  capitalization and incidence estimates — `KAPPA_BOUNDS`, evidence and the mapping in
+  `docs/KAPPA_CAPITALIZATION_EVIDENCE.md`. The bounds feed only the `pot_`/`dividend_`
+  columns; `κ*` is a break-even threshold and does not depend on any assumed `κ`.
+- `G` = net-new road/curb rents, sourced from the sibling cordon model's run artifacts,
+  Section 6. Curb is carried at zero (already remitted to the City/School District).
 - `κ*` is exact because κ enters linearly. Headline table: rows = bundles, columns =
   (surface × rent basis × φ), cells = κ*. `κ* ≤ 0` → pencils statically; `κ* > 1` →
   requires **super-ATCOR** capitalization. **Corrected 2026-08-26:** this originally read
@@ -183,15 +199,41 @@ Lines (amounts to be sourced at build time; classifications are decided here):
 
 ## 6. Road/curb rents (G)
 
-Scenario inputs, not estimates — three named levels, all constants in one cited block:
+**Revised 2026-08-27.** This section originally specified hand-set levels — congestion
+$0/$100M/$250M and curb $0/$50M/$150M, both gross. Both were replaced after checking
+against the sibling models, which found two defects:
 
-- Congestion charge: LOW $0 / CENTRAL $100M / HIGH $250M gross. Anchor citation: NYC CBD
-  tolling actuals (≈$500M/yr run-rate on a much larger CBD), scaled by CBD employment.
-- Curb pricing: LOW $0 / CENTRAL $50M / HIGH $150M gross. Anchor: PPA on-street meter
-  revenue actuals (PPA annual report) with a Shoup-style market-pricing multiple.
+- **The curb component double-counted.** Act 84 of 2012 already routes a $35M/yr minimum
+  PPA on-street payment to the City General Fund with the residual to the School District
+  — the two bodies this ledger holds harmless. Gross curb revenue in Supply lets the same
+  dollar fund today's spending *and* the abolition. Only the increment over the current
+  remittance is net-new, nobody has estimated it, and the sibling curb model still runs on
+  synthetic transactions (PPA meter data pending an RTKL request). **Curb is now carried
+  at zero, with its reason attached**, and appears in `road_rent_frame()` so the omission
+  stays visible.
+- **The high congestion level exceeded the modeled ladder.** $250M is more than the
+  sibling model's $25 high-deterrence scenario, which is already past its
+  revenue-maximizing toll.
 
-Label everywhere as gross of operating cost, hand-set, and outside the parcel base. Do not
-let these numbers migrate into prose as findings.
+G is now **net-new** revenue and comes from `philly-cordon-pricing` run artifacts
+(`runs/<scenario>/<ts>/stage_09_revenue.json`, `net_revenue_annual_usd` p50, steady-state,
+net of opex/evasion/exemptions, git_sha `976c95ceeeb5`):
+
+| level | scenario | amount | p10–p90 |
+|---|---|---|---|
+| `none` | — | $0 | — |
+| `central` | $9/entry, NYC-calibrated | $83.7M | $67.9M–$102.0M |
+| `high` | $25/entry, high deterrence | $175.3M | $138.8M–$218.5M |
+
+Philadelphia prices no cordon today, so the whole amount is genuinely new rent.
+
+**Status is `modeled_sibling`, never `verified`, and that distinction is load-bearing.**
+The figures come from another repo's model, not from a published source or this repo's
+pipeline. That repo's own audit (2026-04-22) found hand-quoted revenue numbers that had
+drifted 36–44% from its actual runs — which is why the values here are read from committed
+run artifacts rather than from its prose — and its README describes the outputs as
+"illustrative ranges based on transferred parameters — not forecasts". Do not let these
+numbers migrate into prose as findings.
 
 ## 7. Collections / surrender haircut
 
