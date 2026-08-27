@@ -51,6 +51,19 @@ def _taxable_parcels():
     return _parcels().iloc[[0, 1, 2, 3]].reset_index(drop=True)
 
 
+def _dual_source_parcels():
+    """Two land surfaces over one assessment: the assessor's, and an independent one.
+
+    ``lycd_land`` stands in for Philadelphia's LYCD surface (``zone_psf x lot area``),
+    which replaces land without re-deriving buildings. ``taxable_total`` is what the
+    parcel is actually billed on and never moves with the alternative surface.
+    """
+    df = _taxable_parcels()
+    df['lycd_land'] = df['taxable_land'] * [1.6, 1.2, 3.0, 0.8]
+    df['taxable_total'] = df['taxable_land'] + df['taxable_building']
+    return df
+
+
 def _model(df=None, **kw):
     kw.setdefault('discount_rate', I)
     kw.setdefault('combined_rate', T)
@@ -500,3 +513,126 @@ def test_notebook_call_sequence_smoke(tmp_path):
             'distribution.png'} <= written
     for path in report['charts_saved']:
         assert Path(path).stat().st_size > 0
+
+
+# 25. REGRESSION — the modeled baseline is the actual levy under either land source.
+#
+# The defect this pins down: passing an independent land surface as land_value_col
+# rebuilds every parcel's *current* bill as t * (alt_land + building), which is not the
+# assessment anybody was billed on. It survived both existing guards — a city-level
+# revenue check that runs on the assessor's own total and never sees this frame, and a
+# zero-sum check that nets the reform against whatever baseline it is handed.
+@pytest.mark.parametrize('rent_basis_col', ['taxable_land', 'lycd_land'])
+def test_baseline_equals_the_actual_levy_under_either_land_source(rent_basis_col):
+    df = _dual_source_parcels()
+    actual_levy = T * df['taxable_total'].sum()
+
+    summary, out = _model(df, rent_basis_col=rent_basis_col,
+                          baseline_total_col='taxable_total')
+
+    assert summary['total_current_tax'] == pytest.approx(actual_levy, rel=1e-12)
+    assert out['current_tax'].sum() == pytest.approx(actual_levy, rel=1e-12)
+    assert summary['baseline_drift_pct'] == pytest.approx(0.0, abs=1e-9)
+    # Per parcel too, not just in total.
+    assert np.allclose(out['current_tax'], T * df['taxable_total'], rtol=1e-12)
+    # The rent surface moves the levy and the pot; it must not move the baseline.
+    assert summary['total_new_land_tax'] == pytest.approx(
+        GROSS * df[rent_basis_col].sum(), rel=1e-12)
+
+
+# 26. REGRESSION — the wrong wiring is now refused instead of quietly overstating.
+def test_alt_land_surface_as_baseline_raises():
+    df = _dual_source_parcels()
+    with pytest.raises(ValueError, match='reconstructed baseline'):
+        model_full_land_rent_tax(df, 'lycd_land', 'taxable_building',
+                                 discount_rate=I, combined_rate=T,
+                                 baseline_total_col='taxable_total')
+
+    # Without the guard the old behaviour still reproduces, and this is its size: the
+    # baseline is overstated by t * (alt_land - assessed_land), invisibly.
+    summary, _ = model_full_land_rent_tax(df, 'lycd_land', 'taxable_building',
+                                          discount_rate=I, combined_rate=T)
+    overstatement = T * (df['lycd_land'].sum() - df['taxable_land'].sum())
+    assert summary['total_current_tax'] - T * df['taxable_total'].sum() == \
+        pytest.approx(overstatement, rel=1e-12)
+    assert overstatement > 0
+
+
+# 27. The held-harmless credit is the assessor's land revenue, not the rent surface's.
+def test_held_harmless_credit_comes_from_the_actual_levy():
+    df = _dual_source_parcels()
+    summary, out = _model(df, rent_basis_col='lycd_land', baseline_total_col='taxable_total')
+
+    l_assessed = df['taxable_land'].sum()
+    l_rent = df['lycd_land'].sum()
+
+    # Forced, not chosen: baseline = t*(L+B) and building tax = t*B, so the land credit
+    # is the residual. Pricing it off the rent surface would hold the taxing bodies
+    # harmless on revenue they never collected.
+    assert summary['total_current_land_tax'] == pytest.approx(T * l_assessed, rel=1e-12)
+    assert summary['total_building_tax'] == pytest.approx(
+        T * df['taxable_building'].sum(), rel=1e-12)
+    assert summary['total_current_land_tax'] + summary['total_building_tax'] == \
+        pytest.approx(summary['total_current_tax'], rel=1e-12)
+
+    assert summary['ubi_pot'] == pytest.approx(GROSS * l_rent - T * l_assessed, rel=1e-12)
+    # Bigger than the pot the defective wiring produced, by exactly t * (L_rent -
+    # L_assessed): crediting the taxing bodies on the larger surface ate that difference.
+    # This is the $3.131B -> $3.406B move in the Philadelphia TY2026 run.
+    assert summary['ubi_pot'] - I * l_rent == pytest.approx(
+        T * (l_rent - l_assessed), rel=1e-12)
+    assert summary['ubi_pot'] > I * l_rent
+
+
+# 28. Identity 3 survives a rent basis that is not the current-tax basis.
+@pytest.mark.parametrize('phi', [0.25, 0.5, 1.0])
+def test_wealth_closure_holds_on_a_divergent_rent_basis(phi):
+    df = _dual_source_parcels()
+    summary, _ = _model(df, rent_basis_col='lycd_land', capture_rate=phi,
+                        baseline_total_col='taxable_total')
+    assert summary['land_wealth_destroyed'] == pytest.approx(summary['ubi_pot'] / I, rel=1e-12)
+    # Pre-reform price is capitalized rent net of the tax actually borne, which exceeds
+    # the assessed sum here because the rent surface is taxed at the smaller one.
+    assert summary['pre_reform_land_value'] == pytest.approx(
+        (GROSS * df['lycd_land'].sum() - T * df['taxable_land'].sum()) / I, rel=1e-12)
+    assert summary['pre_reform_land_value'] > summary['total_land_value_rent_basis']
+    # The raw assessed sum is still reported, unchanged — the notebook's magnitude gate
+    # is keyed to it.
+    assert summary['total_land_value_rent_basis'] == pytest.approx(
+        df['lycd_land'].sum(), rel=1e-12)
+
+
+# 29. Identity 1's precondition is reported, and is about values rather than column names.
+def test_rent_basis_match_is_value_based():
+    df = _dual_source_parcels()
+    df['model_land'] = df['taxable_land']          # an OPA run's own copy, different name
+
+    opa, opa_out = _model(df, rent_basis_col='model_land', rent_basis_label='taxable',
+                          baseline_total_col='taxable_total')
+    assert opa['rent_basis_matches_current_basis'] is True
+    assert opa['rent_basis'] == 'taxable'
+    assert np.allclose(opa_out['tax_change'], I * df['taxable_land'], rtol=1e-12)
+
+    lycd, lycd_out = _model(df, rent_basis_col='lycd_land', rent_basis_label='taxable',
+                            baseline_total_col='taxable_total')
+    assert lycd['rent_basis_matches_current_basis'] is False
+    # The general form, of which i*L is the matching-bases special case.
+    assert np.allclose(lycd_out['tax_change'],
+                       GROSS * df['lycd_land'] - T * df['taxable_land'], rtol=1e-12)
+    assert not np.allclose(lycd_out['tax_change'], I * df['lycd_land'], rtol=1e-6)
+
+
+# 30. A parcel row stays reconcilable when the rent surface is not the billed one.
+def test_parcel_export_carries_both_land_columns(tmp_path):
+    df = _dual_source_parcels()
+    _, parcels = _model(df, rent_basis_col='lycd_land', baseline_total_col='taxable_total')
+    out = save_ubi_parcel_export(parcels, 'testcity', str(tmp_path / 'p.csv'),
+                                 parcel_id_col='parcel_number', discount_rate=I,
+                                 capture_rate=1.0)
+    assert {'taxable_land_value', 'rent_basis_land', 'current_land_tax'} <= set(out.columns)
+    assert np.allclose(out['rent_basis_land'], df['lycd_land'], rtol=1e-12)
+    assert np.allclose(out['taxable_land_value'], df['taxable_land'], rtol=1e-12)
+    # current_tax = t * (billed land + billed building), row by row.
+    assert np.allclose(out['current_land_tax'], T * out['taxable_land_value'], rtol=1e-12)
+    assert np.allclose(out['current_tax'],
+                       out['current_land_tax'] + out['building_tax'], rtol=1e-12)

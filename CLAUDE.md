@@ -402,15 +402,25 @@ convention. Gotchas worth knowing before touching it:
   mis-derivation and rejected a correct LYCD run. The notebook asserts these; a failure there is
   a data-wiring problem, not a formula problem — the arithmetic is proven offline by the 31 tests
   in `tests/test_ubi_utils.py`.
-- **KNOWN DEFECT in the `LAND_VALUE_SOURCE = 'lycd'` path: its baseline is not the actual bill.**
-  The reform math rebuilds current tax as `t * (model_land + taxable_building)` — LYCD land
-  against the OPA building — but LYCD replaces land without re-deriving building, so that total
-  is not the OPA assessment and the modeled baseline overshoots the real levy. Neither guard
-  catches it: Section 5's revenue check runs on `taxable_total` (pure OPA), and the zero-sum
-  check is internally consistent with the same wrong baseline. So the `current_tax`/`tax_change`
-  columns of `philadelphia_lvt_ubi_lycd_ty<YEAR>_parcels.csv` are not quotable per parcel;
-  tract-level conclusions do survive. The OPA path is unaffected by construction. Magnitudes,
-  measured impact and the fix: Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
+- **`land_value_col` is the BASELINE, `rent_basis_col` is the rent surface — do not conflate
+  them.** `model_full_land_rent_tax` takes the land the *current* tax is billed on
+  (`taxable_land`, always) separately from the land the *rent* is priced from (`model_land` under
+  `LAND_VALUE_SOURCE = 'lycd'`, `full_assessed_land` under `RENT_BASIS = 'full'`). Passing the
+  rent surface as the baseline rebuilds every parcel's current bill as `t * (model_land +
+  taxable_building)`, which is no assessment anybody was billed on; that was a real defect,
+  overstating the modeled TY2026 LYCD levy by $274M (12.8%) and understating the pot by $275M.
+  Nothing caught it — the revenue validation runs on `taxable_total` (pure OPA) and the zero-sum
+  check is internally consistent with whatever baseline it is handed — so **always pass
+  `baseline_total_col='taxable_total'`**, which verifies the reconstruction against the billed
+  total and raises on drift. The held-harmless land credit is then `t * taxable_land`, the
+  assessor's land revenue, which is forced rather than chosen: the building tax is stipulated
+  unchanged at `t * taxable_building` and the baseline is the real levy, so the credit is the
+  residual. Two consequences under a divergent surface: identity 1 no longer collapses to `i*L`
+  (it is `phi*(i+t)*L_rent - t*L_assessed`; `summary['rent_basis_matches_current_basis']` reports
+  which form applies), and the winner/loser partition becomes *near*- rather than exactly
+  invariant to the capitalization rate (5 of 408 tracts across 3-9% at TY2026). Full derivation
+  and the corrected TY2026 magnitudes: "The baseline, and the held-harmless credit" plus
+  Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
 - **Rates come from `tax_year_params()`.** Never hardcode 0.013998.
 
 ### Philadelphia — Single-Tax Static Ledger
