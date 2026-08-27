@@ -120,6 +120,21 @@ observed** quantity rather than against a reconstruction.
   `(4*L_lycd+B_lycd)/(4*L_opa+B_opa)` = 1.257, a different quantity from `L_lycd/L_opa`. The band
   rejected a correct run. A guard's expected value needs a derivation, not a recollection.
 
+### The second recurring shape: a claim that outran the artifact it cites
+
+The first shape is a guard reading the wrong column. The second is prose - or a hand-typed
+constant - asserting what the project's own artifacts no longer support. No test catches it,
+because nothing tests prose. Instances so far: a headline kept after new bounds contradicted
+it; an assumption's arithmetic reported as a demonstration (true in half the export, stated
+with none of its conditions); a sibling-repo constant retyped inside the block warning against
+retyping it, whose own audit had found the same shape at 36-44%; unsourced parameters exported
+under authoritative column names. Each was written by the agent that built the thing it
+described.
+
+The remedy is mechanical, not vigilance: make the artifact the source (a test that reads the
+sibling JSON, a provenance frame exported beside the data), and point prose at generated
+tables instead of restating their values.
+
 ### Jurisdiction-Specific Patterns
 
 The tax base works differently by state; `model-policy.md` documents all real patterns with code. Examples: Ohio's 35% assessment ratio (Cincinnati), Minnesota Tax Capacity class rates (St. Paul), derived millage from observed bills (Baltimore), dual homestead/non-homestead rates (Rochester), per-levy abatement (Spokane), Texas entity-specific homestead/over-65 exemptions (Bryan, College Station).
@@ -407,89 +422,67 @@ convention. Gotchas worth knowing before touching it:
 
 ### Philadelphia — Single-Tax Static Ledger
 
-`cities/philadelphia/model_single_tax_ledger.ipynb` is a seventh Philadelphia notebook and the
-Tier-1 answer to "can Philadelphia land rent fund abolishing its taxes on labor and capital?"
-Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
-`docs/SINGLE_TAX_LEDGER_SPEC.md` (which also records the build's deviations). Audited
-2026-08-26 — findings and disposition in `analysis/audits/`; an independent pass is still owed.
+`cities/philadelphia/model_single_tax_ledger.ipynb`, module `lvt/single_tax.py`, tests
+`tests/test_single_tax.py`, spec `docs/SINGLE_TAX_LEDGER_SPEC.md`, kappa evidence
+`docs/KAPPA_CAPITALIZATION_EVIDENCE.md`. Tier-1 answer to "can Philadelphia land rent fund
+abolishing its taxes on labor and capital?" Audited twice (self-check 2026-08-26, independent
+2026-08-27); all findings applied.
 
-- **`kappa` is a swept parameter, not an estimate.** The whole notebook is a break-even
-  calculation: `kappa*` is the uniform share of an abolished tax that would have to reappear
-  as site rent for the bundle to fund itself. Nothing here models a behavioural response.
-  Do not "improve" it by inserting an estimated capitalization rate. Since 2026-08-27 each
-  family *is* bracketed by published estimates (`KAPPA_BOUNDS`, evidence in
-  `docs/KAPPA_CAPITALIZATION_EVIDENCE.md`), but those feed only the `pot_`/`dividend_`
-  columns — `kappa*` still depends on no assumed `kappa`. Two things to know before quoting
-  them: the `building` band is `[0.000, 1.006]` because the two best-identified studies
-  flatly disagree (German pass-through to tenants vs. Coste's 100.6% on Philadelphia's own
-  abatement), and the `wage` family — the largest in every bundle from B2 up — is anchored
-  at the top by Jacob & Livas (2026)'s open-city GE counterfactual for this exact tax
-  (kappa = 1.056, a model-quantified ceiling; their Table 4 "land value" is an annual
-  floorspace-payment FLOW per their eq. (D.5), not a stock — the flow determination is
-  load-bearing and was verified adversarially, see the evidence doc §4) while its low
-  bound is still transferred from a corporate-tax study, with nothing estimating the
-  band's interior.
-- **The land tax is absorbed, never abolished.** `T_land` enters Target once for every bundle;
-  `validate_ledger` asserts no bundle contains it. Confusing absorbed with abolished is the
-  single easiest way to get a wrong answer here.
-- **PICA is a separate line and it is big.** The City General Fund wage figure is *not* the wage
-  tax — the full burden is City + PICA, and the two PICA lines reconcile exactly to the City's
-  remittance account in QCMR Table R-4 (a test asserts this). `model_wage_tax_swap.ipynb`'s figure
-  is an earlier vintage; do not mix them. PICA revenue services PICA bonds, so stranding it is a
-  legal constraint, not just an accounting line. Amounts and sources:
-  `analysis/data/philadelphia_single_tax_ty2026_lines.csv`.
+- **`kappa` is a swept parameter, not an estimate.** `kappa*` is the uniform share of an
+  abolished tax that must reappear as site rent for a bundle to break even, and it depends on
+  no assumed `kappa`. `KAPPA_BOUNDS` brackets each family with published estimates, but those
+  feed only the `pot_`/`dividend_` columns. Every scenario value traces to a citation
+  (`test_every_kappa_scenario_value_traces_to_a_bound`); do not add one that does not. Current
+  values ship as `analysis/data/philadelphia_single_tax_ty2026_kappa_bounds.csv` — read them
+  from there, never from this file.
+- **The `wage` high bound is a CEILING, not a central estimate.** Jacob & Livas (2026)'s
+  Philadelphia GE counterfactual *assumes* an open city, which forces all incidence onto land;
+  their flow object also includes structure quasi-rent that a land-only levy cannot reach.
+  Promoting it to a central value would present an assumption as a finding, and nothing
+  estimates the band's interior. Derivation and conditions: evidence doc section 4.
+- **The land tax is absorbed, never abolished.** `T_land` enters Target once per bundle;
+  `validate_ledger` raises if a bundle contains it. Easiest way to get a wrong answer here.
+- **PICA is a separate line and it is big.** The City General Fund wage figure is *not* the
+  wage tax — the full burden is City + PICA, reconciling exactly to the City's remittance
+  account in QCMR Table R-4 (test-asserted). `model_wage_tax_swap.ipynb`'s figure is an
+  earlier vintage; do not mix them. Stranding PICA is a legal constraint, not just an
+  accounting line: that revenue services PICA bonds.
 - **Use receipts for NPT and BIRT, never rate x base.** Taxpayers credit 60% of BIRT against
   NPT, so published receipts are already net; recomputing either from a base double-counts.
-- **Ledger vintage is FY2026 QCMR current projection**, chosen to match the TY2026 property
-  modelling rather than the spec's original FY2024 default. `LEDGER_VINTAGE = 'FY2025'` gives
-  actuals as a sensitivity. Two lines (School Income Tax, Use & Occupancy) are `estimate`
-  status and print a loud runtime warning; they appear only in bundles B4/B5. SIT moved to
-  the FY2025 actual ($71.8M) on 2026-08-27 (audit A-2) from a $60M FY2023 floor; it stays
-  `estimate` because the Controller analysis is a secondary source.
+- **The haircut `h` applies to R0 AND to the capitalized increment**:
+  `Supply = phi*(1-h)*(R0 + sum(kappa_j*T_j)) + G`. Do not "simplify" it back to `h` on R0
+  alone — the only defense for that asymmetry is that abolition-increment rent accrues to
+  already-compliant parcels, which nobody has evidence for. Pinned by
+  `test_haircut_applies_to_r0_and_to_the_capitalized_increment`.
+- **`kappa* > 1` is NOT "impossible"** — it requires super-ATCOR capitalization, which
+  Gaffney's EBCOR (Excess Burden Comes Out of Rents) makes possible for exactly the
+  distortionary taxes this program abolishes. But do not overread how *attainable* it is:
+  it needs `theta*(1 + MEB/revenue) > 1`, which at the sourced landowner shares means `theta`
+  near 0.64-0.81, i.e. essentially the perfect-mobility ceiling.
+- **The ATCOR convergence needs both `kappa = 1` and `phi = 1`**, and includes `G`; at
+  `phi < 1` bundles diverge. Pinned by `test_atcor_convergence_holds_only_at_full_capture`.
+- **Road/curb rent `G` is net-new, status `modeled_sibling`, never `verified`.** Levels come
+  from `philly-cordon-pricing` run artifacts, read from committed JSON rather than that repo's
+  prose, and pinned by `test_road_rent_amounts_match_sibling_run_artifacts`. Curb is
+  deliberately **zero**: Act 84 of 2012 already routes PPA on-street revenue to the City and
+  School District, so counting it as new supply lets one dollar fund both today's spending and
+  the abolition; only the unestimated efficient-pricing increment would be net-new.
+  `road_rent_frame()` prints the excluded line so the omission stays visible.
+- **Ledger vintage is FY2026 QCMR current projection**, matching the TY2026 property
+  modelling; `LEDGER_VINTAGE = 'FY2025'` gives actuals as a sensitivity. School Income Tax and
+  Use & Occupancy are `estimate` status and print a loud runtime warning; they appear only in
+  bundles B4/B5. Amounts and sources:
+  `analysis/data/philadelphia_single_tax_ty2026_lines.csv`.
 - **The property split comes from the OPA run only.** The notebook reads only
-  `taxable_land_value` from the LYCD export, passes `land_value_col='land_opa'` as the baseline
-  for every case, and sets `baseline_total_col='taxable_total'` — see the LVT-UBI baseline rule
-  above.
-- **The haircut `h` applies to R0 AND to the capitalized increment.** Supply is
-  `phi*(1-h)*(R0 + sum(kappa_j*T_j)) + G`. Until the 2026-08-27 audit (M-3) `h` hit `R0`
-  only, so the increment was collected in full even at 15% assumed delinquency — an
-  asymmetry that understated `kappa*` in every `h > 0` cell. Do not "simplify" it back:
-  the only defense for the asymmetric form is that abolition-increment rent accrues to
-  already-compliant parcels, which nobody has evidence for. Headlines are quoted at
-  `h = 0` and did not move.
-
-- **Road/curb rent `G` is net-new, sourced, and the curb component is deliberately zero.**
-  The levels come from `philly-cordon-pricing` run artifacts (p50 net revenue: central
-  $83.7M at $9/entry, high $175.3M at $25/entry), read from committed JSON rather than that
-  repo's prose — its own audit found hand-quoted revenue figures 36-44% adrift from its
-  runs. Status is `modeled_sibling`, never `verified`. Curb is excluded because Act 84 of
-  2012 already routes a $35M/yr minimum PPA on-street payment to the City General Fund and
-  the residual to the School District: counting gross curb revenue as new supply lets the
-  same dollar fund today's spending and the abolition. Only the increment from efficient
-  pricing would be net-new and nobody has estimated it. `road_rent_frame()` prints the
-  excluded line so the omission stays visible.
-
-- **The ATCOR convergence result needs both `kappa = 1` and `phi = 1`.** Then every bundle's pot
-  is `phi*R0 + G - T_land`. At `phi < 1` the residual `-(1-phi)*sum(T)` is bundle-dependent and
-  they diverge; the road-rent term `G` is also easy to drop from the formula. Pinned by
-  `test_atcor_convergence_holds_only_at_full_capture`.
-- **`kappa* > 1` is NOT "impossible".** It means super-ATCOR capitalization is required.
-  Gaffney's EBCOR (Excess Burden Comes Out of Rents) holds that abolishing a *distortionary*
-  tax raises rent by more than the revenue foregone, because the excess burden is recovered
-  too — exactly the taxes this program abolishes. Do not relabel that region "impossible".
-- **The kappa scenarios are `lit_low` / `lit_high` / `atcor`, and every value traces to a
-  citation.** This replaced `illustrative_low`/`illustrative_mid`, which had no source
-  (audit finding M3) — so the exported column names changed too. `test_every_kappa_scenario_value_traces_to_a_bound`
-  and `test_published_values_match_the_evidence_doc` keep the code and the evidence doc from
-  drifting apart. `test_transferred_kappa_bounds_say_so` keeps the wage family's transferred
-  provenance visible in the export rather than buried in a comment.
-- **Accrual convention is billed, by decision.** Property lines are billed; QCMR tax lines are
-  collections (several bundling current + prior year). Billed keeps the property lines identical
-  to the LVT-UBI model, preserves the B0 wiring check, and is the conservative direction — it
+  `taxable_land_value` from the LYCD export, passes `land_value_col='land_opa'` as the
+  baseline for every case, and sets `baseline_total_col='taxable_total'` — see the LVT-UBI
+  baseline rule above.
+- **Accrual convention is billed, by decision.** Billed keeps the property lines identical to
+  the LVT-UBI model, preserves the B0 wiring check, and is the conservative direction — it
   overstates `kappa*`. Pass `collection_rate=DEFAULT_COLLECTION_RATE` for the collected basis.
-- **Unlike the LVT-UBI model, `i` is not a pure scale knob here.** There it could not change
-  who wins; here it moves `kappa*`, because the Target side is denominated in tax dollars that
-  do not scale with `i`.
+- **Unlike the LVT-UBI model, `i` is not a pure scale knob here** — it moves `kappa*`,
+  because Target is denominated in tax dollars that do not scale with `i`.
+
 
 ## Notebooks
 
