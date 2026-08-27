@@ -422,9 +422,13 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
   columns — `kappa*` still depends on no assumed `kappa`. Two things to know before quoting
   them: the `building` band is `[0.000, 1.006]` because the two best-identified studies
   flatly disagree (German pass-through to tenants vs. Coste's 100.6% on Philadelphia's own
-  abatement), and the `wage` family — the largest in every bundle from B2 up — has **no
-  direct estimate at either end**, its low bound being transferred from a corporate-tax
-  study.
+  abatement), and the `wage` family — the largest in every bundle from B2 up — is anchored
+  at the top by Jacob & Livas (2026)'s open-city GE counterfactual for this exact tax
+  (kappa = 1.056, a model-quantified ceiling; their Table 4 "land value" is an annual
+  floorspace-payment FLOW per their eq. (D.5), not a stock — the flow determination is
+  load-bearing and was verified adversarially, see the evidence doc §4) while its low
+  bound is still transferred from a corporate-tax study, with nothing estimating the
+  band's interior.
 - **The land tax is absorbed, never abolished.** `T_land` enters Target once for every bundle;
   `validate_ledger` asserts no bundle contains it. Confusing absorbed with abolished is the
   single easiest way to get a wrong answer here.
