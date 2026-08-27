@@ -1,0 +1,43 @@
+import sys, pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from lycd_probe import *
+
+g, st = build()
+gc = categorize(g)
+lm, im, taxable, full = solve(gc)
+w, med = winners(taxable)
+
+print('=== BASELINE (as shipped) ===')
+print('land millage %.9f | imp millage %.9f' % (lm, im))
+print('export       24.057999293817424 |            6.014499823454356')
+print()
+print('land base before cap : %.4f B' % (st['land_before_cap'] / 1e9))
+print('land base after cap  : %.4f B' % (st['land_after_cap'] / 1e9))
+print('land REMOVED by cap  : %.4f B  (%.1f%% of pre-cap base)'
+      % (st['land_removed_by_cap'] / 1e9, 100 * st['land_removed_by_cap'] / st['land_before_cap']))
+print('parcels capped       : %d  (%.1f%% of all)' % (st['n_capped'], 100 * st['n_capped'] / len(g)))
+print()
+print('parcels needing land KNN : %d' % st['n_knn_land'])
+print('parcels needing area KNN : %d' % st['n_area_missing'])
+print('parcels w/ GMA but no area: %d' % st['n_gma_but_no_area'])
+print()
+print('gma_level distribution:')
+print(g.gma_level.value_counts().to_string())
+print()
+print('area source distribution:')
+print(g._area_src.value_counts().to_string())
+print()
+print('winners (bill falls): %.2f%% | median change %+.2f%%' % (100 * w, med))
+print()
+
+print('=== WHO GETS CAPPED? (top categories among capped parcels) ===')
+cc = pd.to_numeric(g['category_code'], errors='coerce').astype('Int64').astype(str)
+capped = g['_capped']
+print('capped by area source:')
+print(g.loc[capped, '_area_src'].value_counts().to_string())
+print()
+print('capped by category_code (top 8):')
+print(cc[capped].value_counts().head(8).to_string())
+print()
+print('share of ALL parcels capped, by area source:')
+print((g.groupby('_area_src')['_capped'].mean() * 100).round(2).to_string())

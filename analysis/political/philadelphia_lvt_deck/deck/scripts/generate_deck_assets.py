@@ -12,6 +12,9 @@ political briefs -- nothing here re-derives a number a source file already has a
 """
 from __future__ import annotations
 
+import os
+
+TAX_YEAR = int(os.environ.get("LVT_TAX_YEAR", 2026))   # override: LVT_TAX_YEAR=2027
 import sys
 from pathlib import Path
 
@@ -42,20 +45,20 @@ def _load():
     import pandas as pd
 
     base = pd.read_csv(
-        DATA_DIR / "philadelphia_lycd.csv",
+        DATA_DIR / f"philadelphia_lycd_ty{TAX_YEAR}.csv",
         usecols=["parcel_id", "property_category", "current_tax", "new_tax", "tax_change",
                   "tax_change_pct", "taxable_land_value", "taxable_improvement_value",
                   "is_fully_exempt"],
     ).drop_duplicates("parcel_id")
 
     refined = pd.read_csv(
-        DATA_DIR / "philadelphia_lycd_refined_prototype.csv",
+        DATA_DIR / f"philadelphia_lycd_refined_ty{TAX_YEAR}.csv",
         usecols=["parcel_id", "property_category", "current_tax", "new_tax", "tax_change",
                   "tax_change_pct", "is_fully_exempt"],
     ).drop_duplicates("parcel_id")
 
     post = pd.read_csv(
-        DATA_DIR / "philadelphia_lycd_post_abatement.csv",
+        DATA_DIR / f"philadelphia_lycd_post_abatement_ty{TAX_YEAR}.csv",
         usecols=["parcel_id", "current_tax"],
     ).drop_duplicates("parcel_id")
 
@@ -68,7 +71,7 @@ def _district_join(par_ids_and_values, value_col):
     import geopandas as gpd
     import pandas as pd
 
-    parcels = gpd.read_parquet(PHL_DATA_DIR / "parcels.gpq").drop_duplicates("parcel_number")
+    parcels = gpd.read_parquet(PHL_DATA_DIR / f"parcels_ty{TAX_YEAR}.gpq").drop_duplicates("parcel_number")
     parcels["parcel_id"] = parcels["parcel_number"].astype(str).str.lstrip("0")
     parcels.loc[parcels["parcel_id"] == "", "parcel_id"] = "0"
     parcels["parcel_id"] = parcels["parcel_id"].astype("Int64")

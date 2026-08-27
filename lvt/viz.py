@@ -1663,6 +1663,400 @@ def create_wage_tax_swap_report(
     }
 
 
+
+
+def _fmt_dollars(value: float, decimals: int = 2, compact: bool = True) -> str:
+    """Dollar label with the sign outside the symbol.
+
+    ``compact`` abbreviates to K/M/B, which reads well for aggregates but destroys
+    per-resident amounts (every dividend between $500 and $2,499 collapses to
+    "$1K"), so per-capita charts pass ``compact=False``.
+    """
+    v = float(value)
+    sign = '-' if v < 0 else ''
+    a = abs(v)
+    if compact:
+        for scale, suffix in ((1e9, 'B'), (1e6, 'M'), (1e3, 'K')):
+            if a >= scale:
+                return f'{sign}${a / scale:,.{decimals}f}{suffix}'
+    return f'{sign}${a:,.0f}'
+
+
+def _dollar_axis(ax, axis: str = 'x', compact: bool = True) -> None:
+    """Label an axis in dollars instead of scientific offset notation."""
+    from matplotlib.ticker import FuncFormatter
+    formatter = FuncFormatter(lambda v, _pos: _fmt_dollars(v, decimals=0, compact=compact))
+    (ax.xaxis if axis == 'x' else ax.yaxis).set_major_formatter(formatter)
+
+
+def _ubi_quintile_chart(
+    tract_df: pd.DataFrame,
+    group_col: str,
+    group_name: str,
+    city_title: str,
+) -> Optional[plt.Figure]:
+    """Median net gain per resident by tract quintile on a census dimension.
+
+    Sibling of ``_make_quintile_chart``, which cannot be reused here: it plots a
+    percentage tax change and shades the *most negative* bar darkest, because a
+    falling bill is the good outcome there. In this reform the good outcome is a
+    positive net gain, so the sign convention and the value units both differ.
+    """
+    valid = tract_df[tract_df[group_col].notna()].copy()
+    if group_col == 'median_income':
+        valid = valid[valid[group_col] > 0]
+    if len(valid) < 4 or 'net_gain_per_capita' not in valid.columns:
+        return None
+    valid = valid[valid['net_gain_per_capita'].notna()]
+    if len(valid) < 4:
+        return None
+
+    try:
+        valid['_q'] = pd.qcut(valid[group_col], 5, labels=False, duplicates='drop')
+    except ValueError:
+        return None
+    if valid['_q'].nunique() < 2:
+        return None
+
+    stats = (valid.groupby('_q', observed=False)['net_gain_per_capita']
+             .median().reset_index().sort_values('_q'))
+    vals = stats['net_gain_per_capita'].tolist()
+    n = len(vals)
+    labels = ['Q1 (Lowest)', 'Q2', 'Q3', 'Q4', 'Q5 (Highest)'][:n]
+    colors = ['#4d8ec4' if v >= 0 else '#c44d4d' for v in vals]
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars = ax.bar(np.arange(n), vals, color=colors, edgecolor='none', width=0.72)
+    ax.axhline(0, color='black', linewidth=1.5, zorder=3)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.grid(False)
+    ax.set_xticks(np.arange(n))
+    ax.set_xticklabels(labels, fontsize=11, fontweight='bold')
+    ax.set_ylabel('Median net gain per resident ($/yr)', fontsize=12)
+    _dollar_axis(ax, axis='y', compact=False)
+    for bar, val in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width() / 2, val,
+                _fmt_dollars(val, 0, compact=False), ha='center',
+                va='bottom' if val >= 0 else 'top',
+                fontsize=11, fontweight='bold')
+    ax.set_title(f'Net Gain per Resident by {group_name} Quintile — {city_title}\n'
+                 '(dividend received minus additional land bill)',
+                 fontsize=13, fontweight='bold', pad=12)
+    fig.tight_layout()
+    return fig
+
+
+def _ubi_distribution_chart(tract_df: pd.DataFrame, city_title: str) -> Optional[plt.Figure]:
+    """Histogram of tract-level net gain per resident, with the break-even line marked."""
+    vals = pd.to_numeric(tract_df.get('net_gain_per_capita'), errors='coerce').dropna()
+    if vals.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.hist(vals, bins=min(60, max(5, len(vals) // 4)), color='steelblue',
+            alpha=0.75, edgecolor='none')
+    ax.axvline(0, color='black', linewidth=1.5, label='Break even')
+    ax.axvline(vals.median(), color='crimson', linewidth=1.5, linestyle='--',
+               label=f'Median {_fmt_dollars(vals.median(), 0, compact=False)}')
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.grid(False)
+    ax.set_xlabel('Net gain per resident ($/yr)', fontsize=12)
+    ax.set_ylabel('Number of tracts', fontsize=12)
+    _dollar_axis(ax, compact=False)
+    ax.set_title(f'Distribution of Tract Net Gain per Resident — {city_title}',
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    fig.tight_layout()
+    return fig
+
+
+def _ubi_breakeven_chart(
+    parcels_df: pd.DataFrame,
+    breakeven_land_value: float,
+    city_title: str,
+    land_value_col: str,
+    category_col: str,
+    residential_categories: List[str],
+) -> Optional[plt.Figure]:
+    """Cumulative share of owner-occupiable residential parcels below the break-even land value.
+
+    Scoped to single-unit and small residential parcels on purpose: the threshold
+    compares a parcel-level land bill against a household-level dividend, which is
+    only meaningful where one parcel houses one household.
+    """
+    if parcels_df is None or land_value_col not in parcels_df.columns:
+        return None
+    df = parcels_df
+    if category_col in df.columns and residential_categories:
+        df = df[df[category_col].astype(str).isin(residential_categories)]
+    land = pd.to_numeric(df[land_value_col], errors='coerce').dropna()
+    land = land[land > 0].sort_values()
+    if len(land) < 10 or not np.isfinite(breakeven_land_value):
+        return None
+
+    share = np.arange(1, len(land) + 1) / len(land) * 100
+    below = float((land < breakeven_land_value).mean() * 100)
+    upper = float(np.nanpercentile(land, 99))
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(land.values, share, color='#2b6cb0', linewidth=2)
+    ax.axvline(breakeven_land_value, color='crimson', linewidth=1.8, linestyle='--')
+    ax.axhline(below, color='crimson', linewidth=0.9, linestyle=':')
+    ax.annotate(
+        f'{below:.0f}% of residential parcels sit left of the line,\n'
+        f'below the break-even land value of {_fmt_dollars(breakeven_land_value, 0, compact=False)}',
+        xy=(breakeven_land_value, below),
+        xytext=(min(0.55, 0.18 + below / 200), min(0.82, below / 100 + 0.18)),
+        textcoords='axes fraction', fontsize=11, fontweight='bold',
+        arrowprops=dict(arrowstyle='->', color='crimson', linewidth=1.2),
+    )
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.grid(False)
+    ax.set_xlim(0, max(upper, breakeven_land_value * 1.4))
+    ax.set_ylim(0, 100)
+    ax.set_xlabel('Assessed land value', fontsize=12)
+    ax.set_ylabel('Cumulative share of residential parcels (%)', fontsize=12)
+    _dollar_axis(ax)
+    ax.set_title(f'Who Comes Out Ahead — {city_title}\n'
+                 'Owner-occupier households left of the line receive more in dividend '
+                 'than they pay in additional land tax',
+                 fontsize=13, fontweight='bold', pad=12)
+    fig.tight_layout()
+    return fig
+
+
+def _ubi_who_pays_chart(
+    incidence_summary: Dict[str, Any],
+    city_title: str,
+) -> Optional[plt.Figure]:
+    """Land rent collected, by payer class, against dividends paid to residents.
+
+    The counterpart to ``_make_incidence_shift_chart`` in the wage-tax swap. There
+    the finding was that non-resident commuters stop paying; here it is that a
+    large share of the levy is collected from owners — commercial, institutional
+    and absentee — who receive no dividend at all.
+    """
+    by_class = (incidence_summary or {}).get('rent_by_payer_class') or {}
+    if not by_class:
+        return None
+    items = sorted(by_class.items(), key=lambda kv: kv[1], reverse=True)
+    labels = [k for k, _ in items]
+    values = [v for _, v in items]
+
+    palette = ['#4878CF', '#C4AD66', '#77BEDB', '#D65F5F', '#8C8C8C', '#B47CC7']
+    fig, ax = plt.subplots(figsize=(10, max(4.5, 0.7 * len(labels) + 2.5)))
+    y = np.arange(len(labels))
+    bars = ax.barh(y, values, color=[palette[k % len(palette)] for k in range(len(labels))],
+                   height=0.62)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=11)
+    ax.invert_yaxis()
+    total = sum(values)
+    for bar, val in zip(bars, values):
+        ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
+                f'  {_fmt_dollars(val)} ({val / total * 100:.0f}%)' if total else '',
+                va='center', fontsize=10, fontweight='bold')
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.grid(False)
+    ax.set_xlabel('Annual land rent collected', fontsize=12)
+    ax.set_xlim(0, max(values) * 1.38 if values else 1)
+    _dollar_axis(ax)
+    subtitle = 'Every resident receives an equal dividend; only landowners pay.'
+    share_pop = (incidence_summary or {}).get('share_population_net_positive')
+    if share_pop is not None and np.isfinite(share_pop):
+        subtitle += f'\n{share_pop:.0f}% of residents live in tracts that come out ahead.'
+    ax.set_title(f'Who Pays the Land Rent Levy — {city_title}\n{subtitle}',
+                 fontsize=13, fontweight='bold', pad=12)
+    fig.tight_layout()
+    return fig
+
+
+def _ubi_sensitivity_chart(sweep_df: pd.DataFrame, city_title: str) -> Optional[plt.Figure]:
+    """Dividend per resident across capitalization rates.
+
+    Annotated with the robustness result, because the chart otherwise invites the
+    wrong reading: the capitalization rate moves the dollars but cannot move the
+    winner/loser split, which is invariant to it.
+    """
+    if sweep_df is None or 'swept' not in getattr(sweep_df, 'columns', []):
+        return None
+    rows = sweep_df[sweep_df['swept'] == 'discount_rate'].sort_values('discount_rate')
+    if len(rows) < 2:
+        return None
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.plot(rows['discount_rate'] * 100, rows['ubi_per_capita'],
+            marker='o', color='#2b6cb0', linewidth=2)
+    for rate, val in zip(rows['discount_rate'], rows['ubi_per_capita']):
+        ax.annotate(_fmt_dollars(val, 0, compact=False), (rate * 100, val),
+                    textcoords='offset points',
+                    xytext=(0, 9), ha='center', fontsize=10, fontweight='bold')
+    ax.fill_between(rows['discount_rate'] * 100, 0, rows['ubi_per_capita'],
+                    color='#2b6cb0', alpha=0.10)
+    for spine in ('top', 'right'):
+        ax.spines[spine].set_visible(False)
+    ax.grid(False)
+    ax.set_xlabel('Net capitalization rate applied to land value (%)', fontsize=12)
+    ax.set_ylabel('Dividend per resident ($/yr)', fontsize=12)
+    _dollar_axis(ax, axis='y', compact=False)
+    ax.set_ylim(0, rows['ubi_per_capita'].max() * 1.22)
+    ax.set_title(f'Dividend Sensitivity to the Capitalization Rate — {city_title}\n'
+                 'The rate scales the dollars; it does not change who wins',
+                 fontsize=13, fontweight='bold', pad=12)
+    fig.tight_layout()
+    return fig
+
+
+def create_lvt_ubi_report(
+    tract_gdf: gpd.GeoDataFrame,
+    city: str,
+    output_dir: str = '../../analysis/reports',
+    show: bool = True,
+    *,
+    net_gain_col: str = 'net_gain',
+    net_per_capita_col: str = 'net_gain_per_capita',
+    population_col: str = 'total_pop',
+    income_col: str = 'median_income',
+    minority_col: str = 'minority_pct',
+    parcels_df: Optional[pd.DataFrame] = None,
+    land_value_col: str = 'taxable_land',
+    category_col: str = 'PROPERTY_CATEGORY',
+    residential_categories: Optional[List[str]] = None,
+    ubi_per_capita: Optional[float] = None,
+    incidence_summary: Optional[Dict[str, Any]] = None,
+    breakeven_land_value: Optional[float] = None,
+    sweep_df: Optional[pd.DataFrame] = None,
+) -> dict:
+    """
+    Generate tract-level report charts for an LVT + UBI (full land-rent capture) analysis.
+
+    Sibling of ``create_wage_tax_swap_report``, deliberately not a reuse of it.
+    **The sign convention is inverted**: there ``net_change > 0`` means a tract
+    pays more and the maps use a reversed colormap; here ``net_gain > 0`` means a
+    tract's residents come out ahead. Feeding this analysis through the wage-tax
+    report with renamed columns would silently produce backwards maps.
+
+    Saves PNGs to ``{output_dir}/{city}/``:
+
+    - ``net_per_capita_map.png``          — tract choropleth of net gain per resident.
+    - ``income_quintile.png``             — median net gain per resident by income quintile.
+    - ``minority_quintile.png``           — the same by minority-percentage quintile.
+    - ``breakeven_curve.png``             — share of residential parcels below break-even.
+    - ``who_pays.png``                    — land rent collected by payer class.
+    - ``discount_rate_sensitivity.png``   — dividend across capitalization rates.
+    - ``distribution.png``                — histogram of tract net gain per resident.
+
+    A chart whose inputs are absent is skipped rather than failing, so the report
+    degrades gracefully when e.g. no parcel frame or sweep is supplied.
+
+    Parameters
+    ----------
+    tract_gdf : gpd.GeoDataFrame
+        Tract-level data with geometry, ``net_gain_col`` and ``net_per_capita_col``
+        (as produced by ``save_ubi_tract_export`` merged back onto tract boundaries).
+    city : str
+        City slug used for the output sub-directory.
+    output_dir : str
+        Parent directory for PNGs.
+    show : bool
+        Display figures inline when True. Use False for headless runs.
+    net_gain_col, net_per_capita_col, population_col, income_col, minority_col : str
+        Column names in ``tract_gdf``.
+    parcels_df : pd.DataFrame, optional
+        Parcel-level model output, needed for the break-even chart.
+    land_value_col, category_col : str
+        Column names in ``parcels_df``.
+    residential_categories : list of str, optional
+        Categories treated as owner-occupiable for the break-even chart. Defaults
+        to single-family, small multi-family and other residential.
+    ubi_per_capita : float, optional
+        Dividend per resident, reported back in the return value.
+    incidence_summary : dict, optional
+        Output of ``lvt.ubi_utils.summarize_ubi_incidence``, for the who-pays chart.
+    breakeven_land_value : float, optional
+        Output of ``lvt.ubi_utils.compute_breakeven_land_value``.
+    sweep_df : pd.DataFrame, optional
+        Output of ``lvt.ubi_utils.sweep_land_rent_parameters``.
+
+    Returns
+    -------
+    dict
+        ``row_count``, ``ubi_per_capita``, ``total_dividends``, ``total_tax_change``,
+        ``charts_saved``.
+    """
+    import os
+
+    from matplotlib.colors import TwoSlopeNorm
+
+    if residential_categories is None:
+        residential_categories = ['Single Family Residential',
+                                  'Small Multi-Family (2-4 units)',
+                                  'Other Residential']
+
+    city_dir = os.path.join(output_dir, city)
+    os.makedirs(city_dir, exist_ok=True)
+    charts_saved: List[str] = []
+    city_title = city.replace('_', ' ').title()
+    df = tract_gdf.copy()
+
+    def _save_fig(fig: Optional[plt.Figure], fname: str) -> None:
+        if fig is None:
+            return
+        path = os.path.join(city_dir, fname)
+        fig.savefig(path, dpi=150, bbox_inches='tight')
+        charts_saved.append(path)
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+    if net_per_capita_col in df.columns and df[net_per_capita_col].notna().any():
+        vals = pd.to_numeric(df[net_per_capita_col], errors='coerce')
+        vmin, vmax = float(vals.min()), float(vals.max())
+        norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax) if vmin < 0 < vmax else None
+        fig, ax = plt.subplots(figsize=(12, 10))
+        df.plot(column=net_per_capita_col, cmap='RdYlGn', ax=ax, legend=True, norm=norm,
+                legend_kwds={'label': 'Net gain per resident ($/yr)', 'shrink': 0.8})
+        ax.set_title(f'Net Gain per Resident by Tract — {city_title}\n'
+                     'Green: residents receive more in dividend than the tract\'s '
+                     'landowners pay in additional tax',
+                     fontsize=14, pad=16)
+        ax.set_axis_off()
+        fig.tight_layout()
+        _save_fig(fig, 'net_per_capita_map.png')
+
+    if income_col in df.columns:
+        _save_fig(_ubi_quintile_chart(df, income_col, 'Neighborhood Income', city_title),
+                  'income_quintile.png')
+    if minority_col in df.columns:
+        _save_fig(_ubi_quintile_chart(df, minority_col, 'Minority Percentage', city_title),
+                  'minority_quintile.png')
+
+    if breakeven_land_value is not None:
+        _save_fig(_ubi_breakeven_chart(parcels_df, float(breakeven_land_value), city_title,
+                                       land_value_col, category_col, residential_categories),
+                  'breakeven_curve.png')
+
+    _save_fig(_ubi_who_pays_chart(incidence_summary, city_title), 'who_pays.png')
+    _save_fig(_ubi_sensitivity_chart(sweep_df, city_title), 'discount_rate_sensitivity.png')
+    _save_fig(_ubi_distribution_chart(df, city_title), 'distribution.png')
+
+    total_dividends = (float(df['tract_dividend'].sum())
+                       if 'tract_dividend' in df.columns else np.nan)
+    total_change = float(df['tax_change'].sum()) if 'tax_change' in df.columns else np.nan
+
+    return {
+        'row_count': len(df),
+        'ubi_per_capita': ubi_per_capita,
+        'total_dividends': total_dividends,
+        'total_tax_change': total_change,
+        'charts_saved': charts_saved,
+    }
+
+
 def quintile_progressivity_chart(
     df: pd.DataFrame,
     quintile_col: str,
