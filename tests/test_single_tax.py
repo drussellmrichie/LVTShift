@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lvt.single_tax import (  # noqa: E402
     BUNDLES,
     DEFAULT_COLLECTION_RATE,
+    CORDON_REPO_HINT,
+    CORDON_RUN_ARTIFACTS,
     G_COMPONENTS,
     KAPPA_BOUNDS,
     KAPPA_SCENARIOS_UNSOURCED,
@@ -244,11 +246,28 @@ def test_capture_applies_to_the_capitalized_increment():
     assert s085 == pytest.approx(0.85 * s1)
 
 
-def test_haircut_applies_to_r0_only():
-    """Spec section 7 defines h on R0. Guard against it silently spreading."""
+def test_haircut_applies_to_r0_and_to_the_capitalized_increment():
+    """Audit M-3 (2026-08-27): h used to apply to R0 only, so the kappa*T increment was
+    collected in full even at h = 0.15. Both are site rent, both are haircut. This test
+    replaces `test_haircut_applies_to_r0_only`, which pinned the old asymmetry."""
     r0, t_ab = 2.0e9, 1.0e9
     s = supply(r0, phi=1.0, h=0.10, kappa_amounts=1.0 * t_ab)
-    assert s == pytest.approx(0.9 * r0 + t_ab)
+    assert s == pytest.approx(0.9 * (r0 + t_ab))
+    # And the asymmetric form is now wrong by exactly h * kappa_amounts.
+    assert s == pytest.approx(0.9 * r0 + t_ab - 0.10 * t_ab)
+
+
+def test_haircut_raises_kappa_star():
+    """Direction check: haircutting the increment makes break-even harder, not easier.
+
+    The old asymmetry ran the other way and flattered every h > 0 cell.
+    """
+    r0, t_ab, target = 2.0e9, 1.0e9, 3.0e9
+    k0 = kappa_star(target, r0, t_ab, phi=1.0, h=0.0)
+    k15 = kappa_star(target, r0, t_ab, phi=1.0, h=0.15)
+    assert k15 > k0
+    # Exactly: kappa*(h) = (target - phi(1-h)r0) / (phi(1-h)T)
+    assert k15 == pytest.approx((target - 0.85 * r0) / (0.85 * t_ab))
 
 
 def test_g_enters_outside_capture():
@@ -442,6 +461,35 @@ def test_kappa_scenarios_are_ordered():
     # Deliberate: the Philadelphia capitalization estimate is 100.6%, above ATCOR.
     # kappa > 1 is EBCOR territory, not an error -- do not clamp this to 1.0.
     assert hi["building"] > a["building"]
+
+
+def test_road_rent_amounts_match_sibling_run_artifacts():
+    """The 2026-08-27 audit (M-4) found `high` hand-transcribed as 175_290_000.0 against
+    an artifact reading 175,308,213.52 -- inside the very fix whose comment block warns
+    against quoting the sibling's prose instead of its runs. Prose cannot catch that; this
+    reads the JSON. Skips when the sibling repo is not checked out beside this one, so the
+    suite still runs standalone -- but the skip is announced, because a check that produced
+    no output has not passed."""
+    import json
+
+    repo = Path(__file__).resolve().parents[1] / CORDON_REPO_HINT
+    if not repo.is_dir():
+        pytest.skip(f"sibling cordon repo not present at {repo}; G amounts unverified")
+
+    checked = 0
+    for level, comps in G_COMPONENTS.items():
+        for c in comps:
+            scen, ts = CORDON_RUN_ARTIFACTS[c.key]
+            art = repo / "runs" / scen / ts / "stage_09_revenue.json"
+            if not art.is_file():
+                pytest.skip(f"run artifact missing: {art}")
+            p50 = json.loads(art.read_text())["net_revenue_annual_usd"]["p50"]
+            assert c.amount == pytest.approx(p50, abs=0.01), (
+                f"{c.key}: constant {c.amount:,.2f} != artifact p50 {p50:,.2f} -- "
+                "read the run, do not retype it")
+            checked += 1
+    assert checked == len(CORDON_RUN_ARTIFACTS), (
+        f"only {checked} of {len(CORDON_RUN_ARTIFACTS)} cordon amounts were checked")
 
 
 def test_road_rent_components_sum_to_the_g_levels():

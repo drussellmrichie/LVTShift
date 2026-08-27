@@ -4,9 +4,9 @@ Implements `docs/SINGLE_TAX_LEDGER_SPEC.md` (Tier 1). For a bundle `B` of abolis
 city/school taxes on labor and capital:
 
     Target(B)   = sum(T_j for j in B) + T_land
-    Supply(B)   = phi * ((1 - h) * R0 + sum(kappa_j * T_j)) + G
+    Supply(B)   = phi * (1 - h) * (R0 + sum(kappa_j * T_j)) + G
     Pot         = Supply - Target
-    kappa*(B)   = (Target - G - phi * (1 - h) * R0) / (phi * sum(T_j))
+    kappa*(B)   = (Target - G - phi*(1-h)*R0) / (phi * (1-h) * sum(T_j))
 
 `T_land` is the current land-portion property tax. It is *absorbed*, not abolished:
 the taxing bodies must be made whole for it out of the rent levy, so it enters Target
@@ -80,6 +80,8 @@ __all__ = [
     "DEFAULT_COLLECTION_RATE",
     "RoadRentComponent",
     "G_COMPONENTS",
+    "CORDON_RUN_ARTIFACTS",
+    "CORDON_REPO_HINT",
     "G_SCENARIOS",
     "road_rent_frame",
     "build_ledger",
@@ -152,7 +154,7 @@ _TAX_LINES: Dict[str, Dict[str, float]] = {
 }
 
 # School District lines are not in the City QCMR and are sourced separately.
-_SIT_AMOUNT = 60_000_000.0
+_SIT_AMOUNT = 71_800_000.0   # FY2025 actual; was a $60.0M FY2023 floor until audit A-2
 _UO_AMOUNT = 200_000_000.0
 
 # Current-year property collections / billings at TY2026, from the repo's own
@@ -249,16 +251,20 @@ def build_ledger(
             "year. Receipts basis, so the NPT credit interaction is already netted.",
         ),
         LedgerLine(
-            "sit", "School Income Tax", _SIT_AMOUNT, "FY2023", "collected",
+            "sit", "School Income Tax", _SIT_AMOUNT, "FY2025", "collected",
             "school", "capital",
-            "City of Philadelphia Department of Revenue, 'Unearned income in Philly is "
-            "subject to the School Income Tax' (2024-05-06): local public schools "
-            "received 'more than $60 million' from the SIT in FY2023. "
-            "https://www.phila.gov/2024-05-06-unearned-income-in-philly-is-subject-to-the-school-income-tax/",
-            _RETRIEVED, "estimate",
-            "ESTIMATE: a rounded floor ('more than $60 million'), FY2023 vintage, not "
-            "the ledger vintage. SIT is <1.5% of every bundle it appears in, so the "
-            "imprecision cannot move a kappa* conclusion -- but it is not verified.",
+            "Office of the City Controller, press release accompanying 'Half of School "
+            "District of Philadelphia's $4.6 Billion Budget Relies on 16 Types of Local "
+            "Taxes, Fees & Contributions' (April 2026), FY25 table: School Income Tax "
+            "$71,800,000. "
+            "https://controller.phila.gov/wp-content/uploads/2026/04/PressRelease_MMM_April2026_SDPFunding.pdf",
+            "2026-08-27", "estimate",
+            "ESTIMATE: a secondary source (Controller analysis), not the School District's "
+            "own adopted budget, so the status stays 'estimate'. Updated 2026-08-27 "
+            "(audit A-2) from a $60.0M FY2023 floor ('more than $60 million', Revenue "
+            "Dept. blog) that was 16.4% low and a vintage adrift -- the better figure was "
+            "sitting in the same source already cited for the U&O line. Moves kappa*(B4) "
+            "by about +0.0009; SIT is <1.5% of every bundle it appears in.",
         ),
         LedgerLine(
             "uo", "Business Use & Occupancy Tax", _UO_AMOUNT, "FY2026", "projected",
@@ -272,7 +278,10 @@ def build_ledger(
             "ESTIMATE: rounded to the nearest $100M in a secondary source; the School "
             "District adopted budget is the primary document and was not machine-"
             "readable at build time. Separate levy from the property tax, so no overlap "
-            "adjustment (spec 4.5).",
+            "adjustment (spec 4.5). Vintage caveat (audit A-2, 2026-08-27): the "
+            "Controller's own release presents the $200M against FY25 while this line is "
+            "labelled FY2026; at $100M rounding the figure stands either way, but the "
+            "label is not independently confirmed.",
         ),
         LedgerLine(
             "rtt", "Realty Transfer Tax (City)", amt["rtt"], vintage,
@@ -370,9 +379,17 @@ BUNDLES: Dict[str, Dict[str, object]] = {
 #
 # kappa > 1 is NOT impossible: EBCOR (Excess Burden Comes Out of Rents) holds that
 # abolishing a *distortionary* tax raises rent by more than the revenue foregone,
-# because the deadweight loss is recovered too. `building`'s upper bound is a published
-# point estimate slightly above 1, which is the concrete form of that point. Treat
-# kappa* > 1 as "requires super-ATCOR capitalization", never as "impossible".
+# because the deadweight loss is recovered too. Treat kappa* > 1 as "requires
+# super-ATCOR capitalization", never as "impossible".
+#
+# But do not overread how ATTAINABLE that region is (2026-08-27 audit, M-1). kappa > 1
+# needs theta*(1 + MEB/revenue) > 1; with the sourced landowner shares below (0.25-0.30)
+# and mainstream marginal-excess-burden estimates of roughly 12-56 cents per dollar,
+# that requires theta of about 0.64-0.81 -- reachable only near the perfect-mobility
+# ceiling, which is a benchmark and not an estimate. `building`'s upper bound is a
+# published point estimate slightly above 1, but its 95% CI (86.0-115.2%) spans 1.0 and
+# the author's own reading is FULL capitalization, so it is evidence for kappa ~ 1, not
+# evidence for kappa > 1.
 
 
 @dataclass(frozen=True)
@@ -432,7 +449,7 @@ _LOFFLER_SIEGLOCH_2021 = KappaSource(
 _LYU_2024 = KappaSource(
     citation=("Lyu, Xueying (2024), 'Revisiting property tax capitalization', "
               "Regional Science and Urban Economics 108. "
-              "https://doi.org/10.1016/j.regsciurbeco.2024.104028"),
+              "https://doi.org/10.1016/j.regsciurbeco.2024.104039"),
     value=0.71,
     basis="capitalization_rate",
     setting="Shanghai progressive property-tax pilot, DiD across neighborhoods",
@@ -620,6 +637,24 @@ KAPPA_SCENARIOS_UNSOURCED: Tuple[str, ...] = ()
 #      revenue ladder -- more than its $25 high-deterrence scenario, which is already
 #      past the revenue-maximizing toll.
 #
+# TWO LIMITATIONS, stated because they were unstated until audit A-5 (2026-08-27):
+#
+#   * G and R0 are not independent in equilibrium. A cordon that relieves congestion
+#     raises nearby land values, and under full capture that uplift would itself enter
+#     R0 once assessments caught up. No double-count arises as computed -- R0 is frozen
+#     at today's toll-free assessments, and G is toll collections while the uplift would
+#     be capitalised consumer surplus, which are different dollars -- but the uplift
+#     channel is absent from Supply entirely, which is conservative. Do NOT close that
+#     gap by adding a third "land value uplift from congestion relief" line: against a
+#     dynamic R0 that would be the actual double-count.
+#   * G is the ONLY behavioural quantity in Supply. The tax side of this ledger has no
+#     behavioural response at all, while these figures embed a full one to the toll
+#     (entry reduction, mode shift, Year 5+ steady state). That asymmetry is deliberate
+#     and is the right way round -- a no-response toll revenue is not a meaningful
+#     object, the toll's own-price response is first-order to G, and the tax swap's
+#     cross-effect on travel is second-order -- but "static, no behavioral response"
+#     describes the tax side, not this term.
+#
 # PROVENANCE CAVEAT. The congestion figures come from a sibling repo, not from a
 # published source or from this repo's pipeline. That repo was audited 2026-04-22 and
 # the audit's first finding was hand-estimated revenue numbers that had drifted from
@@ -646,9 +681,23 @@ _CORDON_RUN = (
     "philly-cordon-pricing (Progress-and-Poverty-Institute), run artifact "
     "runs/{scen}/{ts}/stage_09_revenue.json, net_revenue_annual_usd p50, "
     "steady-state (Year 5+), net of operating cost, ~7% evasion and ~12% exemption "
-    "discounts; git_sha 976c95ceeeb5. Repo audit: AUDIT.md dated 2026-04-22."
+    "discounts; git_sha 976c95ceeeb560da84d382134a2ec1bd381d65b8-dirty -- the runs were "
+    "produced from a dirty worktree, so the suffix is part of the provenance rather than "
+    "noise. Repo audit: AUDIT.md dated 2026-04-22."
 )
 _G_RETRIEVED = "2026-08-27"
+
+# Where the amounts above were read from, kept machine-checkable. The 2026-08-27 audit
+# (M-4) found the `high` amount had been hand-transcribed as 175_290_000.0 against an
+# artifact reading 175,308,213.52 -- the exact failure the PROVENANCE CAVEAT block above
+# exists to prevent, committed inside the fix that introduced the block. Prose alone did
+# not catch it, so `tests/test_single_tax.py::test_road_rent_amounts_match_sibling_run_artifacts`
+# now reads these files when they exist and skips when they do not.
+CORDON_RUN_ARTIFACTS: Dict[str, Tuple[str, str]] = {
+    "cordon_nyc_calibrated": ("nyc_calibrated", "20260806T194631Z"),
+    "cordon_high_deterrence": ("high_deterrence", "20260806T194632Z"),
+}
+CORDON_REPO_HINT = "../philly-cordon-pricing"
 
 G_COMPONENTS: Dict[str, Tuple[RoadRentComponent, ...]] = {
     "none": (),
@@ -656,7 +705,7 @@ G_COMPONENTS: Dict[str, Tuple[RoadRentComponent, ...]] = {
         RoadRentComponent(
             key="cordon_nyc_calibrated",
             name="Center City cordon toll, $9/entry (NYC-calibrated)",
-            amount=83_657_804.0,
+            amount=83_657_804.40,
             source=_CORDON_RUN.format(scen="nyc_calibrated", ts="20260806T194631Z"),
             retrieved=_G_RETRIEVED,
             status="modeled_sibling",
@@ -669,7 +718,7 @@ G_COMPONENTS: Dict[str, Tuple[RoadRentComponent, ...]] = {
         RoadRentComponent(
             key="cordon_high_deterrence",
             name="Center City cordon toll, $25/entry (high deterrence)",
-            amount=175_290_000.0,
+            amount=175_308_213.52,
             source=_CORDON_RUN.format(scen="high_deterrence", ts="20260806T194632Z"),
             retrieved=_G_RETRIEVED,
             status="modeled_sibling",
@@ -696,7 +745,13 @@ _CURB_EXCLUDED = RoadRentComponent(
           "data. The sibling model still runs on synthetic transactions (PPA meter data "
           "pending an RTKL request) and its efficient-pricing scenarios return LESS "
           "revenue than status quo on that synthetic baseline. Excluded until there is "
-          "something to cite; the direction of the omission is conservative."),
+          "something to cite. Magnitude is small and the SIGN IS AMBIGUOUS, bounded by "
+          "roughly $10M (audit A-5, 2026-08-27 -- an earlier version of this note claimed "
+          "the omission was conservative, which it did not establish): the counted cordon "
+          "suppresses Center City entries by ~9-23%, cannibalising the very Act 84 "
+          "remittance this exclusion holds at status quo, and the sibling's own "
+          "efficient-pricing runs come in below status quo, so the unestimated increment "
+          "is not necessarily positive."),
 )
 
 G_SCENARIOS: Dict[str, float] = {
@@ -848,12 +903,22 @@ def kappa_vector(scenario: str) -> Dict[str, float]:
 
 def supply(r0: float, *, phi: float, g: float = 0.0, h: float = 0.0,
            kappa_amounts: float = 0.0) -> float:
-    """phi * ((1-h)*R0 + sum(kappa_j * T_j)) + G.
+    """phi * (1-h) * (R0 + sum(kappa_j * T_j)) + G.
 
-    `kappa_amounts` is the already-weighted sum(kappa_j * T_j). Capture applies to
-    the capitalized increment too: it is site rent like any other.
+    `kappa_amounts` is the already-weighted sum(kappa_j * T_j). Both phi and h apply to
+    the capitalized increment: it is site rent like any other, and the levy cannot
+    collect what a parcel does not pay whichever component of its rent the shortfall is
+    attributed to.
+
+    Changed 2026-08-27 (audit M-3). Until then h applied to R0 only, so the increment was
+    collected in full even in cells assuming 15% delinquency and surrender -- an
+    asymmetry with no stated defense that understated kappa* in every h > 0 cell (a
+    reported 0.502 at h = 0.15 became 0.590 under symmetric treatment). The only
+    available defense -- that abolition-increment rent accrues disproportionately to
+    already-compliant parcels -- is an empirical claim nobody has evidence for, so it was
+    not adopted. Headline figures are quoted at h = 0 and are unaffected.
     """
-    return phi * ((1.0 - h) * r0 + kappa_amounts) + g
+    return phi * (1.0 - h) * (r0 + kappa_amounts) + g
 
 
 def pot(r0: float, target: float, **kw) -> float:
@@ -864,11 +929,13 @@ def kappa_star(target: float, r0: float, t_abolished: float, *,
                phi: float, g: float = 0.0, h: float = 0.0) -> float:
     """Uniform kappa at which Supply == Target. NaN when nothing is abolished.
 
-    The spec's printed formula is the h = 0 case of this.
+    The spec's printed formula is the h = 0 case of this. Since audit M-3 the haircut
+    applies to the capitalized increment as well as to R0, so it appears in the
+    denominator too -- see `supply`.
     """
     if t_abolished <= 0:
         return float("nan")
-    return (target - g - phi * (1.0 - h) * r0) / (phi * t_abolished)
+    return (target - g - phi * (1.0 - h) * r0) / (phi * (1.0 - h) * t_abolished)
 
 
 def sweep_bundles(

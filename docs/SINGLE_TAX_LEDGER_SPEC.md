@@ -19,16 +19,41 @@ scenarios now derive from `KAPPA_BOUNDS`, each end a published estimate with a c
 estimates to kappa: `docs/KAPPA_CAPITALIZATION_EVIDENCE.md`. The same pass replaced the
 hand-set road/curb rents (Section 6). Headline kappa* at `G = 0` is unchanged (B3/OPA
 0.502, B3/LYCD 0.212); at central road rent it rises slightly because G fell from $150M to
-$83.7M — B3/OPA 0.467 -> **0.483**, B3/LYCD 0.177 -> **0.192**. M5's kappa>1 framing is now
-demonstrated rather than argued: the Philadelphia capitalization estimate is 100.6%, so at
-`lit_high` the B1 dividend exceeds B0's.
+$83.7M — B3/OPA 0.467 -> **0.483**, B3/LYCD 0.177 -> **0.192**.
 
-**Still owed: an INDEPENDENT adversarial pass.** That audit was run by the agent that wrote
-the build, in the same session, so it is a self-check — not the independent verification this
-spec asks for. Re-run `/analysis-audit` with independent subagents or a fresh session before
-quoting any κ* number outside this repo, nominating the audit's M3 (unsourced κ scenarios)
-and M5 (the κ>1 framing) for refutation, since both are judgment calls made by the same
-reasoning that produced the design.
+An earlier version of this block claimed M5's kappa>1 framing was "demonstrated rather
+than argued" because the B1 dividend exceeds B0's at `lit_high`. The 2026-08-27
+independent audit (M-1) struck that: the Philadelphia estimate's 95% CI spans 1.0, the
+B1>B0 margin is the arithmetic of assuming kappa_building = 1.006 rather than evidence
+for it, and the inequality reverses at phi = 0.85. The framing stands on its theory —
+kappa > 1 is attainable, not impossible — and is not demonstrated by the export.
+
+**2026-08-27 — the independent pass ran, and its findings are applied.**
+`analysis/audits/single_tax_ledger_audit_2026-08-27.md`, six fresh-context verifiers.
+The core substantiated under independent re-verification (all twenty QCMR lines
+re-extracted from the cited PDF, the $0 City-side reconciliation re-derived, κ*
+recomputed across the whole export, every guard fed a case it should catch), and both
+findings this spec nominated for refutation were upheld rather than overturned. Six
+Material findings were raised, four of them against the same day's κ/G work, and all are
+now fixed: two overclaiming passages reworded (M-1, M-2), the haircut made symmetric
+across R₀ and the capitalized increment (M-3, §7), a hand-transcribed cordon constant
+corrected and pinned by a test that reads the run artifact (M-4), the conservative-
+direction claim in the evidence doc qualified for the Wage Tax's non-resident base
+(M-5), and a broken DOI fixed (M-6). Advisories closed alongside: κ-bounds provenance now
+ships as a companion CSV, the School Income Tax line moved to the FY2025 actual, and the
+G section gained the two limitations below. Headline κ* at `h = 0` is unchanged.
+
+**The independent adversarial pass is no longer outstanding.** It was owed because the
+2026-08-26 audit was run by the agent that wrote the build, in the same session, making it
+a self-check; its M3 (unsourced κ scenarios) and M5 (the κ>1 framing) were nominated for
+refutation as judgment calls made by the same reasoning that produced the design. Both
+were attacked by dedicated fresh-context refuters on 2026-08-27 and both survived. One
+caveat on the pass's own independence, recorded rather than glossed: the κ/G work of PR
+#39 was authored by the session that then commissioned the audit, so that portion is
+independent only at the subagent level — the verifiers got file paths and claimed
+defects, never the author's reasoning, and four of the six Material findings landed
+against that same session's work. The carried-over core was audited by a genuinely
+separate session.
 
 ### Deviations taken during the build
 
@@ -85,9 +110,9 @@ For a bundle `B` of abolished taxes with annual receipts `T_j`:
 
 ```
 Target(B)          = Σ_{j∈B} T_j  +  T_land
-Supply(B, κ⃗, ...) = φ · ( R₀ + Σ_{j∈B} κ_j·T_j )  +  G
+Supply(B, κ⃗, ...) = φ · (1−h) · ( R₀ + Σ_{j∈B} κ_j·T_j )  +  G
 Pot                = Supply − Target
-κ*(B)              = (Target − φ·R₀ − G) / (φ · Σ_{j∈B} T_j)     # uniform break-even κ
+κ*(B)              = (Target − G − φ(1−h)R₀) / (φ · (1−h) · Σ_{j∈B} T_j)   # break-even κ
 ```
 
 where:
@@ -227,6 +252,26 @@ net of opex/evasion/exemptions, git_sha `976c95ceeeb5`):
 
 Philadelphia prices no cordon today, so the whole amount is genuinely new rent.
 
+**Two limitations, stated after audit A-5 (2026-08-27).** (i) `G` and `R₀` are not
+independent in equilibrium — a cordon raises nearby land values, and under full capture
+that uplift would enter `R₀` once assessments caught up. Nothing double-counts as
+computed (R₀ is frozen at toll-free assessments; G is collections, the uplift would be
+capitalised consumer surplus), and the uplift channel is simply absent, which is
+conservative. Do not close that gap with a separate uplift line against a dynamic `R₀` —
+that would be the real double-count. (ii) `G` is the **only** behavioural quantity in
+Supply: the tax side has no behavioural response while these figures embed a full one to
+the toll. That is the right way round — a no-response toll revenue is not a meaningful
+object — but §1's "static ledger only, no behavioural response" describes the tax side,
+not this term.
+
+The Act 84 premise behind the curb exclusion was verified against primary sources in the
+same audit (PPA's own Act 84 explainer and its audited FY2017 financial statements:
+$35.35M to the City General Fund plus $9.77M to the School District, consistent with the
+~$40–50M figure), with one nuance — PPA's explainer dates the $35M floor to a 2014
+action while its financials attribute the formula to Act 84 of 2012. Immaterial to the
+exclusion logic. The claim that excluding curb is *conservative* was withdrawn: see the
+component's own note for the two channels that make the sign ambiguous.
+
 **Status is `modeled_sibling`, never `verified`, and that distinction is load-bearing.**
 The figures come from another repo's model, not from a published source or this repo's
 pipeline. That repo's own audit (2026-04-22) found hand-quoted revenue numbers that had
@@ -237,7 +282,8 @@ numbers migrate into prose as findings.
 
 ## 7. Collections / surrender haircut
 
-One scenario axis, `h ∈ {0, 5%, 10%, 15%}`, applied as `R₀ → (1−h)·R₀`. It stands in for
+One scenario axis, `h ∈ {0, 5%, 10%, 15%}`, applied to **all captured rent**:
+`(R₀ + Σκ·T) → (1−h)·(R₀ + Σκ·T)`. It stands in for
 both ordinary delinquency (~5% is the repo's known wedge) and the negative-rent surrender
 tail at full capture (Limitation 17). Grounding section in the notebook: join the parcel
 export to OpenDataPhilly's real-estate tax delinquency dataset (Carto,
@@ -245,6 +291,16 @@ export to OpenDataPhilly's real-estate tax delinquency dataset (Carto,
 value of parcels that are ≥3 years delinquent or plausibly surrender-risk, as evidence for
 which `h` is realistic. Keep this bounded to one section — the full surrender analysis is
 its own future notebook.
+
+**Revised 2026-08-27 (audit M-3).** This section originally read `R₀ → (1−h)·R₀`, which
+left the capitalized increment `Σκ·T` collected in full even in cells assuming 15%
+delinquency and surrender. The asymmetry had no stated defense and sat against the
+module's own rationale for applying `φ` to the increment ("it is site rent like any
+other"). It understated `κ*` in every `h > 0` cell — a reported 0.502 at `h = 0.15`
+becomes 0.590 under symmetric treatment. The only defense available was that
+abolition-increment rent accrues disproportionately to already-compliant parcels, an
+empirical claim with no evidence behind it, so the symmetric form was adopted instead.
+Headline figures are quoted at `h = 0` and are unchanged.
 
 ## 8. Bundles
 

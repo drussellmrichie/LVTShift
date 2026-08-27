@@ -439,11 +439,21 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
 - **Ledger vintage is FY2026 QCMR current projection**, chosen to match the TY2026 property
   modelling rather than the spec's original FY2024 default. `LEDGER_VINTAGE = 'FY2025'` gives
   actuals as a sensitivity. Two lines (School Income Tax, Use & Occupancy) are `estimate`
-  status and print a loud runtime warning; they appear only in bundles B4/B5.
+  status and print a loud runtime warning; they appear only in bundles B4/B5. SIT moved to
+  the FY2025 actual ($71.8M) on 2026-08-27 (audit A-2) from a $60M FY2023 floor; it stays
+  `estimate` because the Controller analysis is a secondary source.
 - **The property split comes from the OPA run only.** The notebook reads only
   `taxable_land_value` from the LYCD export, passes `land_value_col='land_opa'` as the baseline
   for every case, and sets `baseline_total_col='taxable_total'` — see the LVT-UBI baseline rule
   above.
+- **The haircut `h` applies to R0 AND to the capitalized increment.** Supply is
+  `phi*(1-h)*(R0 + sum(kappa_j*T_j)) + G`. Until the 2026-08-27 audit (M-3) `h` hit `R0`
+  only, so the increment was collected in full even at 15% assumed delinquency — an
+  asymmetry that understated `kappa*` in every `h > 0` cell. Do not "simplify" it back:
+  the only defense for the asymmetric form is that abolition-increment rent accrues to
+  already-compliant parcels, which nobody has evidence for. Headlines are quoted at
+  `h = 0` and did not move.
+
 - **Road/curb rent `G` is net-new, sourced, and the curb component is deliberately zero.**
   The levels come from `philly-cordon-pricing` run artifacts (p50 net revenue: central
   $83.7M at $9/entry, high $175.3M at $25/entry), read from committed JSON rather than that
@@ -505,7 +515,9 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
   land: LYCD over-values it, OPA under-values it, and both are severely dispersed
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 - `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
-  a prior audit; a new pass writes a new dated file so the two can be compared.
+  a prior audit; a new pass writes a new dated file so the two can be compared. The single-tax
+  ledger has two: a 2026-08-26 self-check and the 2026-08-27 independent pass that re-verified
+  it (all findings from both are applied).
 
 ## Code Style
 
