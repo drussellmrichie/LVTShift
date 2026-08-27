@@ -260,6 +260,15 @@ area** — a uniform area error cancels completely. Only *mixed* conventions and
 matter. Do not infer from the small headline movement that the area layer is unimportant; it is
 load-bearing for any per-parcel land value and for anything that is not scale-invariant.
 
+**Neither land surface is right about vacant land, and the error runs opposite ways.** Tested
+against observed vacant-land sales (`scripts/vacant_land_ratio_study.py`): LYCD over-values it,
+OPA under-values it, and correcting both cuts the LYCD/OPA land-base ratio from ~1.46x to ~1.22x
+— so the surface disagreement that dominates every Philadelphia result here is mostly one
+correctable error in one property class. Both surfaces are also severely dispersed on vacant
+land (COD far above the IAAO standard), which is the quantified form of the LVT-UBI guide's
+"assessment error becomes confiscation at full capture". Findings and limits:
+`docs/VACANT_LAND_VALUATION.md`.
+
 **Surface parking is hidden inside "Vacant Land", and only `building_code` separates it.**
 OPA gives most parking lots `category_code = 6`, so the model's Vacant Land category
 contains them. The separator is the `R*` building-code family: `RA` (non-commercial lot),
@@ -468,6 +477,8 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 - `docs/LVT_LEGAL_DECISIONING_GUIDE.md` — legal framework behind the legality-analyzer skill
 - `docs/SINGLE_TAX_LEDGER_SPEC.md` — spec for the single-tax static ledger, plus its build deviations
 - `docs/WASHINGTON_DC_VACANT_LAND.md` — why DC's Class 3/4 regime reaches idle buildings, not idle land
+- `docs/VACANT_LAND_VALUATION.md` — sales-based test of the OPA vs LYCD land surfaces on vacant
+  land: LYCD over-values it, OPA under-values it, and both are severely dispersed
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 - `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
   a prior audit; a new pass writes a new dated file so the two can be compared.
