@@ -9,7 +9,7 @@ tax exactly as billed today, holds the taxing bodies harmless on the land portio
 of their current revenue, and pays the residual out as an equal per-capita
 dividend to residents.
 
-Two consequences follow from that and shape every function here.
+Three consequences follow from that and shape every function here.
 
 First, **there is no revenue-neutral solve**. The rate is exogenous: it is a
 capture share of an imputed rent flow, not a millage backed out of a revenue
@@ -22,6 +22,36 @@ ad-valorem base the levy would be denominated in ceases to exist. A real
 implementation would have to charge an assessed *rental* value that OPA does not
 publish today. ``implied_land_millage_equivalent`` in the summary is a
 comparability aid against the repo's split-rate models, not an implementable rate.
+
+Third, **the baseline is the actual levy, always**. Because the reform is not
+revenue-neutral, ``current_tax`` is not a bookkeeping intermediate that cancels
+out of the answer: it is the counterfactual bill the reform is measured against,
+and every dollar of the dividend is the gap between the two. So the land the
+*current* tax is rebuilt on (``land_value_col``) must be the assessor's column
+even when the rent is priced off an independent land surface, which belongs in
+``rent_basis_col``. Those two roles were conflated once, and the resulting
+overstated baseline survived a revenue check and a zero-sum check untouched —
+pass ``baseline_total_col`` and the reconstruction is verified against the billed
+total instead.
+
+The baseline and the held-harmless credit
+-----------------------------------------
+When the rent surface is not the assessor's, "the land portion of current revenue"
+that the taxing bodies are held harmless on has to be pinned down. It is
+``t * L_assessed``, the assessor's land revenue, and this is forced rather than
+chosen: the reform stipulates that the building tax is byte-identical to today's
+(``t * B``) and that the baseline is the real levy (``t * (L_assessed + B)``), so
+the land credit is the residual of the second after the first. Pricing the credit
+off the alternative surface instead would hold the taxing bodies harmless on
+revenue they never collected.
+
+The reading this rejects is that an independent land surface is a *reassessment*,
+whose baseline would be what the parcel would pay if the assessor had valued land
+that way. It is not one: it replaces land without re-deriving buildings, so it
+implies no coherent parcel total, and a revenue-neutral reassessment is a
+different reform served by ``lvt.reassessment``. An independent surface here
+answers "how much rent does this site throw off", never "what is this parcel
+billed today" — so it belongs in the rent basis and nowhere else.
 
 The capitalization gross-up
 ---------------------------
@@ -46,24 +76,39 @@ Three identities
 Each holds exactly, and each is asserted in the worked notebook and unit-tested:
 
 1. ``tax_change = L * (phi*(i+t) - t)``, which at ``phi = 1`` collapses to
-   ``i * L``. Precondition: the rent basis is the same column the current land
-   tax is levied on.
+   ``i * L``. Precondition: the rent basis *is* the land the current tax is
+   levied on. ``summary['rent_basis_matches_current_basis']`` reports it, and it
+   is false both when the rent reaches exempt land and when it is priced off an
+   independent surface. In general ``tax_change = phi*(i+t)*L_rent - t*L_assessed``.
 2. ``owner_residual = (i+t)*(L+B) - new_tax = (1-phi)*(i+t)*L + i*B``, which at
    ``phi = 1`` is ``i * B``. The owner keeps a normal return on the structure and
    zero on the land. This is the arithmetic proof that the rent levy and the
-   retained building tax do not double-count.
-3. ``land_wealth_destroyed = ubi_pot / i``, exact for every ``phi``. The one-time
-   capitalization loss to landowners equals the present value of the dividend
-   stream. Stock and flow are two views of one transfer — never add them.
+   retained building tax do not double-count. No precondition — it never touches
+   the baseline.
+3. ``land_wealth_destroyed = ubi_pot / i``, exact for every ``phi`` and every rent
+   basis under the held-harmless framing. The one-time capitalization loss to
+   landowners equals the present value of the dividend stream. Stock and flow are
+   two views of one transfer — never add them. This holds only because land price
+   is computed as capitalized rent *net of the tax actually borne*
+   (``pre_reform_land_value``), which equals the assessed sum when the two bases
+   agree and diverges from it, correctly, when they do not.
 
 What the answer does and does not depend on
 -------------------------------------------
-At ``phi = 1`` under the held-harmless framing, a geography's net position is
+At ``phi = 1`` under the held-harmless framing, with the rent priced off the land
+the current tax is billed on, a geography's net position is
 ``i * (sum(L) * pop_j / P - L_j)``. The sign of that does not involve ``i``, and
 scaling every land value by a constant scales every net position by the same
 constant. So the capitalization rate and any *uniform* assessment bias set the
 dollar magnitudes but cannot change who wins. Only non-uniform assessment error
 redistributes. Sensitivity ranks: land share >> i >> phi >> t.
+
+That invariance carries identity 1's precondition. Off a rent surface that is not
+the billed land it becomes ``(i+t)*A_j - t*B_j``, with ``A_j`` and ``B_j`` the
+population-share residuals of the two surfaces, so raising ``i`` re-weights them
+and a geography can cross once, at ``i* = t*(B_j - A_j)/A_j``. ``t << i`` keeps
+that small — near-invariance, not invariance — and scaling *both* surfaces by a
+constant is still sign-preserving while scaling only the rent surface is not.
 
 Functions
 ---------
@@ -193,6 +238,9 @@ def model_full_land_rent_tax(
     improvement_value_col: str,
     *,
     rent_basis_col: Optional[str] = None,
+    rent_basis_label: Optional[str] = None,
+    baseline_total_col: Optional[str] = None,
+    baseline_tolerance_pct: float = 0.01,
     discount_rate: float = DEFAULT_DISCOUNT_RATE,
     combined_rate: float = 0.013998,
     capture_rate: float = 1.0,
@@ -213,21 +261,51 @@ def model_full_land_rent_tax(
     docstring for why that is deliberate, and for why at ``capture_rate = 1.0``
     the levy cannot actually be denominated as a millage on assessed value.
 
+    **Two land columns, two different jobs.** ``land_value_col`` is the land the
+    *current* tax is billed on — always the assessor's column, so that
+    ``current_tax`` reconstructs the real levy. ``rent_basis_col`` is the land the
+    *rent* is priced from, and may be an independent surface (Philadelphia's LYCD
+    ``zone_psf x lot area``) or a wider basis that reaches exempt land. Passing a
+    non-assessor surface as ``land_value_col`` silently rebuilds every parcel's
+    current bill against a value nobody was billed on; ``baseline_total_col``
+    exists to make that impossible to do quietly. See "The baseline" in
+    ``docs/LVT_UBI_GUIDE.md``.
+
     Parameters
     ----------
     df : pd.DataFrame
         Parcel data.
     land_value_col : str
         Land value the *current* tax is levied on (Philadelphia: ``taxable_land``,
-        which is net of homestead, abatement and institutional relief).
+        which is net of homestead, abatement and institutional relief). This is
+        the baseline, not the rent surface: it must be the assessor's column even
+        when the rent is priced off a different one, or ``current_tax`` stops
+        being the bill anybody actually pays.
     improvement_value_col : str
         Improvement value the *current* building tax is levied on.
     rent_basis_col : str, optional
         Land value the *rent* is imputed from. Defaults to ``land_value_col``.
-        Pass a full-assessed-land column (e.g. ``taxable_land + exempt_land``) to
-        model a levy that reaches currently-exempt land — an explicit policy
-        choice that breaks the ``tax_change = i * L`` identity, since rent is then
-        charged on a base the current tax does not touch.
+        Pass an independent land surface, or a full-assessed-land column (e.g.
+        ``taxable_land + exempt_land``) to model a levy that reaches
+        currently-exempt land. Either breaks the ``tax_change = i * L`` identity,
+        since rent is then charged on a base the current tax does not touch;
+        ``summary['rent_basis_matches_current_basis']`` reports whether it holds.
+    rent_basis_label : str, optional
+        Caller's name for the rent basis, echoed into the summary. Defaults to
+        ``'taxable'`` when ``rent_basis_col`` is unset and ``'full'`` otherwise —
+        a name-based guess that is wrong whenever the rent basis is a different
+        *surface* rather than a wider *scope*, so pass it explicitly then.
+    baseline_total_col : str, optional
+        Column whose ``combined_rate x`` sum is the actual billed levy
+        (Philadelphia: ``taxable_land + taxable_building``). When given, the
+        reconstructed ``current_tax`` total is checked against it and a
+        divergence beyond ``baseline_tolerance_pct`` raises. Pass it whenever the
+        rent basis is not the assessor's land: it is the only guard that catches a
+        baseline rebuilt on the wrong land column, because the revenue validation
+        and the zero-sum check are both blind to it.
+    baseline_tolerance_pct : float, default 0.01
+        Tolerance for that check, in percent. The reconstruction is exact
+        arithmetic, so the default is tight on purpose.
     discount_rate : float, default 0.05
         Net capitalization rate.
     combined_rate : float, default 0.013998
@@ -250,9 +328,11 @@ def model_full_land_rent_tax(
     -------
     tuple
         ``(summary, result_df)``. ``result_df`` is a copy of ``df`` with
-        ``land_rent``, ``new_land_tax``, ``building_tax``, ``current_land_tax``,
-        ``current_tax``, ``new_tax``, ``tax_change``, ``tax_change_pct`` (NaN,
-        never inf, where ``current_tax`` is 0) and ``owner_residual``.
+        ``rent_basis_land``, ``land_rent``, ``new_land_tax``, ``building_tax``,
+        ``current_land_tax``, ``current_tax``, ``new_tax``, ``tax_change``,
+        ``tax_change_pct`` (NaN, never inf, where ``current_tax`` is 0) and
+        ``owner_residual``. ``rent_basis_land`` is carried explicitly so a row
+        stays reconcilable when the rent surface is not the billed one.
         ``summary`` carries both revenue framings, the wealth account, and every
         parameter echoed back.
 
@@ -260,7 +340,9 @@ def model_full_land_rent_tax(
     ------
     ValueError
         On an unknown ``revenue_framing``, a non-positive ``discount_rate``, a
-        ``capture_rate`` outside [0, 1], or a missing column.
+        ``capture_rate`` outside [0, 1], a missing column, or a reconstructed
+        baseline that misses ``baseline_total_col`` by more than
+        ``baseline_tolerance_pct``.
     """
     if revenue_framing not in ('city_held_harmless', 'full_redistribution'):
         raise ValueError(
@@ -277,6 +359,8 @@ def model_full_land_rent_tax(
     basis_col = rent_basis_col or land_value_col
     if basis_col not in df.columns:
         raise ValueError(f"rent_basis_col {basis_col!r} not found in df")
+    if baseline_total_col is not None and baseline_total_col not in df.columns:
+        raise ValueError(f"baseline_total_col {baseline_total_col!r} not found in df")
 
     out = df.copy()
     land_current = _clip_numeric(out[land_value_col])
@@ -292,15 +376,42 @@ def model_full_land_rent_tax(
         improvement = improvement.where(keep, 0.0)
         n_exempt = int((~keep).sum())
     else:
+        keep = pd.Series(True, index=out.index)
         n_exempt = 0
 
     gross_up = discount_rate + combined_rate
 
+    # Carried explicitly: where the rent surface is not the billed one, a row cannot be
+    # reconciled from the exported land value alone.
+    out['rent_basis_land'] = land_basis
     out['land_rent'] = land_basis * gross_up
     out['new_land_tax'] = capture_rate * out['land_rent']
     out['building_tax'] = combined_rate * improvement
     out['current_land_tax'] = combined_rate * land_current
     out['current_tax'] = out['current_land_tax'] + out['building_tax']
+
+    # The one guard that catches a baseline rebuilt on the wrong land column. A city's
+    # revenue validation runs on the assessor's own total and never sees this frame, and
+    # the zero-sum check nets the reform against whatever baseline it is handed, so both
+    # pass unchanged while every current_tax is wrong. Only comparing the reconstruction
+    # against the billed total catches it.
+    total_current_tax = float(out['current_tax'].sum())
+    baseline_levy = float('nan')
+    baseline_drift_pct = float('nan')
+    if baseline_total_col is not None:
+        baseline_total = _clip_numeric(out[baseline_total_col]).where(keep, 0.0)
+        baseline_levy = float(combined_rate * baseline_total.sum())
+        if baseline_levy > 0:
+            baseline_drift_pct = (total_current_tax / baseline_levy - 1.0) * 100.0
+            if abs(baseline_drift_pct) > baseline_tolerance_pct:
+                raise ValueError(
+                    f"reconstructed baseline ${total_current_tax:,.0f} differs from "
+                    f"{combined_rate:g} * {baseline_total_col} = ${baseline_levy:,.0f} by "
+                    f"{baseline_drift_pct:+.3f}% (tolerance {baseline_tolerance_pct}%). "
+                    f"land_value_col={land_value_col!r} must be the land the current tax "
+                    "is billed on; an independent land surface belongs in rent_basis_col."
+                )
+
     out['new_tax'] = out['new_land_tax'] + out['building_tax']
     out['tax_change'] = out['new_tax'] - out['current_tax']
     positive_current = out['current_tax'] > 0
@@ -313,6 +424,7 @@ def model_full_land_rent_tax(
 
     total_new_land_tax = float(out['new_land_tax'].sum())
     total_current_land_tax = float(out['current_land_tax'].sum())
+    total_land_rent = float(out['land_rent'].sum())
     held_harmless_pot = total_new_land_tax - total_current_land_tax
     full_redistribution_pot = total_new_land_tax
 
@@ -323,27 +435,42 @@ def model_full_land_rent_tax(
         ubi_pot = full_redistribution_pot
         budget_hole = total_current_land_tax
 
-    pre_reform_land_value = float(land_basis.sum())
-    post_reform_land_value = pre_reform_land_value * gross_up * (1.0 - capture_rate) / discount_rate
+    # Land price is capitalized rent net of the land tax actually borne, before and after.
+    # Where the rent basis is the column the current land tax is levied on, the pre-reform
+    # figure reduces to that column's sum; where it is not, the assessed sum is not a price
+    # this model's own rent and tax figures imply, and using it would break identity 3.
+    pre_reform_land_value = (total_land_rent - total_current_land_tax) / discount_rate
+    post_reform_land_value = (total_land_rent - total_new_land_tax) / discount_rate
+
+    # Value-based, not name-based: an OPA run copies taxable_land into its own model_land
+    # column, so comparing column *names* would report a mismatch that is not one.
+    basis_matches = bool(np.allclose(land_basis.to_numpy(dtype=float),
+                                     land_current.to_numpy(dtype=float),
+                                     rtol=1e-12, atol=1e-6))
 
     summary: Dict[str, float] = {
         'n_parcels': int(len(out)),
         'n_exempt': n_exempt,
-        'rent_basis': 'full' if basis_col != land_value_col else 'taxable',
+        'rent_basis': (str(rent_basis_label) if rent_basis_label is not None
+                       else ('full' if basis_col != land_value_col else 'taxable')),
         'rent_basis_col': basis_col,
+        'rent_basis_matches_current_basis': basis_matches,
+        'baseline_total_col': baseline_total_col,
+        'total_baseline_levy': baseline_levy,
+        'baseline_drift_pct': baseline_drift_pct,
         'revenue_framing': revenue_framing,
         'discount_rate': float(discount_rate),
         'combined_rate': float(combined_rate),
         'capture_rate': float(capture_rate),
         'gross_up_factor': float(gross_up),
         'total_land_value_current_basis': float(land_current.sum()),
-        'total_land_value_rent_basis': pre_reform_land_value,
+        'total_land_value_rent_basis': float(land_basis.sum()),
         'total_improvement_value': float(improvement.sum()),
-        'total_land_rent': float(out['land_rent'].sum()),
+        'total_land_rent': total_land_rent,
         'total_new_land_tax': total_new_land_tax,
         'total_current_land_tax': total_current_land_tax,
         'total_building_tax': float(out['building_tax'].sum()),
-        'total_current_tax': float(out['current_tax'].sum()),
+        'total_current_tax': total_current_tax,
         'total_new_tax': float(out['new_tax'].sum()),
         'city_held_harmless_pot': held_harmless_pot,
         'full_redistribution_pot': full_redistribution_pot,
@@ -365,8 +492,12 @@ def model_full_land_rent_tax(
         )
 
     if verbose:
-        print(f"Rent basis:                {summary['rent_basis']} ({basis_col})")
-        print(f"Land value (rent basis):   ${pre_reform_land_value:,.0f}")
+        print(f"Rent basis:                {summary['rent_basis']} ({basis_col})"
+              f"{'' if basis_matches else '  [not the current-tax land base]'}")
+        print(f"Land value (rent basis):   ${float(land_basis.sum()):,.0f}")
+        print(f"Current levy (baseline):   ${total_current_tax:,.0f}"
+              + (f"  ({baseline_drift_pct:+.4f}% vs. {baseline_total_col})"
+                 if baseline_total_col is not None else ""))
         print(f"Imputed annual land rent:  ${summary['total_land_rent']:,.0f}")
         print(f"New land levy:             ${total_new_land_tax:,.0f}")
         print(f"Current land tax:          ${total_current_land_tax:,.0f}")
@@ -582,6 +713,13 @@ def compute_breakeven_land_value(
     it is only meaningful for owner-occupied single-unit parcels. On a 40-unit
     apartment parcel one owner pays the land bill while 40 households collect
     dividends, and the comparison is meaningless. Scope callers accordingly.
+
+    A single threshold in ``L`` also presumes identity 1 — that the rent is priced
+    off the same land the current tax is billed on. Where it is not,
+    ``tax_change = phi*(i+t)*L_rent - t*L_assessed`` depends on two land values and
+    no threshold in either one partitions winners from losers. Compare
+    ``tax_change`` against ``ubi_per_capita * household_size`` directly there; the
+    two agree exactly when the bases do.
 
     Parameters
     ----------
@@ -924,7 +1062,10 @@ def save_ubi_parcel_export(
     Secondary to ``save_ubi_tract_export``: the dividend side of the reform has no
     parcel-level meaning, so this covers the levy side only. Unlike the wage-tax
     parcel export, ``current_tax`` is real here — parcels genuinely pay today's
-    property tax — so ``tax_change`` and ``tax_change_pct`` are meaningful.
+    property tax — so ``tax_change`` and ``tax_change_pct`` are meaningful. That
+    holds only as long as the model was handed the assessor's land as
+    ``land_value_col``; ``model_full_land_rent_tax``'s ``baseline_total_col`` is
+    what keeps it true.
 
     This does not reuse ``lvt.lvt_utils.save_standard_export``, whose revenue
     drift check assumes the reform is revenue-neutral. This one is deliberately
@@ -945,7 +1086,10 @@ def save_ubi_parcel_export(
         Optional source columns carried through when present. The first three are renamed
         on the way out to ``property_category`` / ``taxable_land_value`` /
         ``taxable_improvement_value``, so an OPA-land run and an LYCD-land run share one
-        schema regardless of which source column each read from.
+        schema regardless of which source column each read from. ``land_value_col`` is
+        the land the *current* bill is levied on; the land the rent was priced from is
+        exported separately as ``rent_basis_land``, and the two are equal on a run whose
+        rent basis is the assessor's own column.
     model_type : str
         Encoded model description recorded as a constant column.
     discount_rate, capture_rate : float, optional
@@ -956,8 +1100,8 @@ def save_ubi_parcel_export(
     pd.DataFrame
         The exported frame, also written to ``output_path``.
     """
-    required = ['land_rent', 'new_land_tax', 'building_tax', 'current_tax', 'new_tax',
-                'tax_change', 'tax_change_pct']
+    required = ['rent_basis_land', 'land_rent', 'new_land_tax', 'building_tax',
+                'current_land_tax', 'current_tax', 'new_tax', 'tax_change', 'tax_change_pct']
     missing = [c for c in required if c not in parcels_df.columns]
     if missing:
         raise ValueError(
