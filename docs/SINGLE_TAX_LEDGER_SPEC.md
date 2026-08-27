@@ -1,14 +1,54 @@
 # Spec — Philadelphia Single-Tax Static Ledger (Tier 1)
 
-Status: spec, not yet built. Design settled 2026-08-26 (session: LVT-UBI distributional
-analysis → Jacob & Livas extension discussion). Build target: `cities/philadelphia/model_single_tax_ledger.ipynb`
-plus `lvt/single_tax.py` and `tests/test_single_tax.py`.
+Status: **BUILT 2026-08-26.** Design settled the same day (session: LVT-UBI distributional
+analysis → Jacob & Livas extension discussion). Delivered:
+`cities/philadelphia/model_single_tax_ledger.ipynb` (executed), `lvt/single_tax.py`,
+`tests/test_single_tax.py` (39 tests). Outputs:
+`analysis/data/philadelphia_single_tax_ty2026_ledger.csv` (2,880 rows),
+`..._lines.csv`, three charts in `analysis/reports/philadelphia_single_tax/`.
 
-**Build guidance.** The notebook assembly, sweep math, charts and export are bounded work —
-build with Sonnet 5. The one error-prone part is the revenue ledger (Section 3): every line
-must be verified against a primary document per the sourcing rules below, and the overlap
-rules in Section 4 are the traps. Audit the finished notebook with Opus/Fable before quoting
-any κ\* number.
+**Still owed: the adversarial audit.** The build has not been audited. Run `/analysis-audit`
+at Opus/Fable level before quoting any κ\* number outside this repo — in particular against
+the ledger (Section 3) and the overlap rules (Section 4), which are where a plausible-but-wrong
+number would hide.
+
+### Deviations taken during the build
+
+1. **Vintage is FY2026 current projection, not the FY2024 actuals this spec defaulted to.**
+   Section 3's own rule is not to mix vintages, and the property lines are TY2026; FY2026 is
+   therefore the consistent choice. The FY2026 Q3 QCMR's Real Property figure ($891,102k)
+   reconciles exactly with `lvt/philadelphia.tax_year_params(2026)`, confirming the match.
+   FY2025 actuals are implemented as a second vintage (`LEDGER_VINTAGE = 'FY2025'`); FY2024
+   was dropped because the QCMR does not carry a FY2024 PICA column.
+2. **PICA is materially larger than this spec assumed.** Section 4.3 guessed "roughly 1.5
+   points" and asked for verification. Verified: PICA is a *separate line* from the City
+   General Fund wage tax, at $731.3M wage + $31.4M NPT (FY2026). The full wage-and-earnings
+   burden is **$2.779B**, not the City-only $2.048B and not the $2.4528B in the older
+   wage-tax-swap notebook. Any bundle containing the wage tax is ~$730M larger than a
+   City-General-Fund-only reading would suggest.
+3. **Parking Tax is $0 in the City General Fund**, not the ~$100M assumed. It left the
+   General Fund after FY2023 (ACFR FY2024 Schedule XIX shows $0 against FY2023's $101,941k)
+   and is absent from FY2026 QCMR Table R-2. Classification ('kept') is unchanged, so this
+   does not affect any κ\*.
+4. **Two lines remain estimates**, flagged loudly at runtime and in `status`: School Income
+   Tax ($60M, a rounded FY2023 floor from a Department of Revenue post) and Business Use &
+   Occupancy ($200M, rounded to the nearest $100M in a City Controller analysis). The School
+   District's own adopted budget is the primary document and was not machine-readable at
+   build time. Both appear only in B4/B5.
+
+### Predictions in Section 8 vs. what was built
+
+| | Predicted | Actual |
+|---|---|---|
+| B0 pot | $2.151B / $1,350 | $2.151B / $1,350 ✓ |
+| B1 at κ=1 | equals B0 | equals B0 ✓ |
+| κ\*(B3, OPA) | 0.4–0.5 | **0.502** (0.467 w/ central road rent) ✓ |
+| κ\*(B3, LYCD, central G) | 0.07–0.15 | **0.177** — modestly above |
+| κ\*(B5, OPA) | ">0.5, likely >1 in pessimistic cells" | **0.628**; >1 in 3 of 1,440 cells, all OPA, all in the (φ=0.85, h=0.15, i=3%) corner ✓ |
+
+The B3/LYCD miss is explained and is the ledger being *more* correct than the prediction: the
+prediction used the wage-tax-swap notebook's $2.45B wage figure, while the verified FY2026
+PICA-inclusive figure is $2.779B — deviation 2 above. No ledger error was found.
 
 ## 1. Question
 

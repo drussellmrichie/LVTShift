@@ -413,6 +413,42 @@ convention. Gotchas worth knowing before touching it:
   measured impact and the fix: Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
 - **Rates come from `tax_year_params()`.** Never hardcode 0.013998.
 
+### Philadelphia — Single-Tax Static Ledger
+
+`cities/philadelphia/model_single_tax_ledger.ipynb` is a seventh Philadelphia notebook and the
+Tier-1 answer to "can Philadelphia land rent fund abolishing its taxes on labor and capital?"
+Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
+`docs/SINGLE_TAX_LEDGER_SPEC.md` (which also records the build's deviations). Not audited yet.
+
+- **`kappa` is a swept parameter, not an estimate.** The whole notebook is a break-even
+  calculation: `kappa*` is the uniform share of an abolished tax that would have to reappear
+  as site rent for the bundle to fund itself. Nothing here models a behavioural response.
+  Do not "improve" it by inserting an estimated capitalization rate.
+- **The land tax is absorbed, never abolished.** `T_land` enters Target once for every bundle;
+  `validate_ledger` asserts no bundle contains it. Confusing absorbed with abolished is the
+  single easiest way to get a wrong answer here.
+- **PICA is a separate line and it is big.** The City General Fund wage figure is *not* the
+  wage tax. Full wage-and-earnings burden = City + PICA; at FY2026 that is $2.048B + $0.731B.
+  The older `model_wage_tax_swap.ipynb` figure ($2.4528B) is a different, earlier vintage —
+  do not mix them. PICA revenue services PICA bonds, so stranding it is a real legal
+  constraint on implementation, not just an accounting line.
+- **Use receipts for NPT and BIRT, never rate x base.** Taxpayers credit 60% of BIRT against
+  NPT, so published receipts are already net; recomputing either from a base double-counts.
+- **Ledger vintage is FY2026 QCMR current projection**, chosen to match the TY2026 property
+  modelling rather than the spec's original FY2024 default. `LEDGER_VINTAGE = 'FY2025'` gives
+  actuals as a sensitivity. Two lines (School Income Tax, Use & Occupancy) are `estimate`
+  status and print a loud runtime warning; they appear only in bundles B4/B5.
+- **The property split comes from the OPA run only.** Taking `total_current_land_tax` from a
+  LYCD run would import the Limitation-19 baseline defect. The notebook reads only
+  `taxable_land_value` from the LYCD export.
+- **At `kappa = 1` every bundle's pot is identical** (`R0 - T_land`), because abolishing a tax
+  is exactly self-funding under full ATCOR. That is the generalisation of the building-tax
+  invariance and a useful internal consistency check, visible as the convergence point in
+  `dividend_vs_kappa.png`.
+- **Unlike the LVT-UBI model, `i` is not a pure scale knob here.** There it could not change
+  who wins; here it moves `kappa*`, because the Target side is denominated in tax dollars that
+  do not scale with `i`.
+
 ## Notebooks
 
 Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `.claude/skills/build-notebook.md`:
