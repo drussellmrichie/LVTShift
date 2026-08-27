@@ -73,12 +73,36 @@ ratio **1.03, COD 58.6** — so proper sales scrutiny cuts the dispersion substa
 that number should be preferred for anything depending on dispersion. But even 58.6 is nearly
 three times the IAAO standard, and the two studies agree closely on the level.
 
+### Not all of that dispersion is the surface's fault
+
+A vacant sale price is the land price plus transaction noise, and for vacant land that noise
+is large: the sibling `property_valuation_simulations` project measures it on Philadelphia
+repeat sales at **σ_e = 0.30–0.42 natural log per sale** (finding F45). A ratio study cannot
+see the difference, so it charges the surface for dispersion the surface did not cause. That
+noise alone produces **COD 25–36 against a perfect assessment**.
+
+Backing it out (log-normal ratios, variances adding — an estimate, not a measurement):
+
+| series | observed COD | surface COD net of noise |
+|---|---|---|
+| OPA, bare land ≥ $20k | 79 | 63–71 |
+| LYCD, bare land ≥ $20k | 98 | 82–90 |
+| OPA, `philly_open_avmkit` scrutinized | 59 | 42–50 |
+
+**The finding survives; it is smaller than first published, not absent.** Every corrected
+figure is still between two and four and a half times the IAAO standard of 20. Note this is a *different* mechanism
+from the sales-scrutiny caveat below — scrutiny removes bad sales, whereas this noise is
+irreducible and remains after perfect scrutiny.
+
 This lands directly on Limitation 4 of `docs/LVT_UBI_GUIDE.md`, "assessment error becomes
 confiscation at full capture", which the module could not previously quantify. For vacant
-land it now can: with COD in the 50s–90s, effective capture `phi x (assessed / true)` exceeds
-100% of true rent for a large minority of parcels. **That is a stronger argument for stopping
-near `phi ~ 0.85` than anything in the ledger** — and it bites hardest on exactly the property
-class full capture is meant to reach.
+land it now can: with surface COD in the 40s–90s, effective capture `phi x (assessed / true)`
+exceeds 100% of true rent for a substantial minority of parcels. **That remains a concrete
+argument for stopping short of full capture** — and it bites hardest on exactly the property
+class full capture is meant to reach. It is a weaker argument than the uncorrected COD made
+it look, and the honest form is a direction, not a specific stopping point: the ledger's
+`phi ~ 0.85` is not derived from these numbers, and deriving one would need a parcel-level
+error distribution this study does not produce.
 
 ## Limitations
 
@@ -91,7 +115,20 @@ class full capture is meant to reach.
   abandonment under full capture.
 - The correction rescales aggregates. A genuinely better surface would re-value parcels, which
   is `philly_open_avmkit`'s job, not this repo's.
-- Sale dates span 2023–2026 against a TY2026 valuation date, with no time adjustment.
+- Sale dates span 2023–2026 against a TY2026 valuation date, with no time adjustment. This
+  was flagged as a worry and is now measured: splitting the same cut by sale year moves COD by
+  about 1% either way (OPA 79 pooled vs 78.2 within-year; LYCD 98 vs 98.6), so cross-year
+  pooling contributes essentially nothing to the dispersion. It does move the *level* — OPA's
+  median ratio drifts 0.77 (2024) to 0.62 (2026), consistent with prices rising against a
+  static surface — so read the level as a mid-period average. Worth stating because the
+  sibling project found the opposite for its own validation (its F25: restricting to a single
+  sale year drove almost all of a 0.32 to 0.46 R² gain), and that mechanism does not transfer
+  here.
+- The noise-floor correction above assumes log-normal ratios and independence between surface
+  error and transaction noise. Both are approximations, and F45's σ_e rests on 127 repeat
+  pairs — enough to establish that the floor is large, not enough to pin it. It corrects no
+  level: transaction noise is mean-zero in logs, so every median, aggregate and `kappa*` figure
+  in this document is unaffected by it.
 
 ## Repo boundary
 
