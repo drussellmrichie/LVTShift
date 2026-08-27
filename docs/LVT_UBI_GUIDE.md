@@ -54,14 +54,57 @@ growth premium (vacant land held speculatively), the correct denominator is larg
 `P * (i + t)` **overstates currently realizable rent** — on precisely the parcels an LVT targets.
 That is arguably the intended incentive, but it is an overstatement and is stated as one.
 
+## The baseline, and the held-harmless credit
+
+Because the reform is not revenue-neutral, `current_tax` is not a bookkeeping intermediate that
+cancels out of the answer. It is the counterfactual bill the reform is measured against, and every
+dollar of the dividend is the gap between the two. So the baseline is **the actual levy, always**:
+`t × (assessed land + assessed building)`, the bill the parcel is really sent.
+
+That matters the moment the land the rent is priced from is not the assessor's — the
+`LAND_VALUE_SOURCE = 'lycd'` cross-run. `model_full_land_rent_tax` therefore takes the two land
+columns for two different jobs:
+
+| Argument | Role | Philadelphia |
+| --- | --- | --- |
+| `land_value_col` | the land the **current** tax is billed on — the baseline | always `taxable_land` |
+| `rent_basis_col` | the land the **rent** is priced from | `model_land`, or `full_assessed_land` |
+| `baseline_total_col` | the billed total the reconstruction is checked against | `taxable_total` |
+
+**What "the land portion of current revenue" means is then forced, not chosen.** The reform
+stipulates two things — the building tax is byte-identical to today's (`t·B`), and the baseline is
+the real levy (`t·(L_assessed + B)`) — so the land credit the taxing bodies are held harmless on is
+the residual of the second after the first, namely `t·L_assessed`. Pricing that credit off the
+alternative surface instead would hold them harmless on revenue they never collected. The pot is
+therefore `phi·(i+t)·L_rent − t·L_assessed`, and the two land values are genuinely different
+quantities in it.
+
+The reading this rejects is that an independent land surface is a *reassessment*, whose baseline
+would be what the parcel would pay had the assessor valued land that way. It is not one: LYCD
+replaces land without re-deriving buildings, so it implies no coherent parcel total, and a
+revenue-neutral reassessment is a different reform served by `lvt/reassessment.py`. An independent
+surface here answers "how much rent does this site throw off", never "what is this parcel billed
+today" — so it belongs in the rent basis and nowhere else.
+
+**Pass `baseline_total_col`.** It is the only guard that catches a baseline rebuilt on the wrong
+land column: the city-level revenue validation runs on the assessor's own total and never sees the
+model's frame, and the zero-sum check nets the reform against whatever baseline it is handed, so
+both pass unchanged while every `current_tax` is wrong. That is exactly how Limitation 19 went
+undetected. The check is exact arithmetic, so its tolerance is 0.01% by default.
+
 ## The three identities
 
 Each holds exactly. Each is asserted in the notebook and unit-tested, rather than described in
 prose and hoped for.
 
 **1. `tax_change = L * (phi*(i+t) - t)`**, which at full capture collapses to **`i * L`**.
-*Precondition:* the rent basis is the same column the current land tax is levied on. It does not
-hold under `RENT_BASIS = 'full'`, where rent is charged on a base the current tax does not touch.
+*Precondition:* the rent basis is the land the current tax is levied on. In general
+`tax_change = phi*(i+t)*L_rent − t*L_assessed`, and the collapse needs the two to be the same
+value. It therefore does not hold under `RENT_BASIS = 'full'`, where rent is charged on a base the
+current tax does not touch, nor under `LAND_VALUE_SOURCE = 'lycd'`, where it is charged on a
+different surface. `summary['rent_basis_matches_current_basis']` reports the precondition — by
+value, not by column name, so an OPA run that copies `taxable_land` into its own `model_land`
+column is correctly reported as matching. The notebook asserts whichever form applies.
 
 **2. `owner_residual = (i+t)*(L+B) - new_tax = (1-phi)*(i+t)*L + i*B`**, which at full capture is
 **`i * B`**. Apply the same capitalization logic to the whole property and the owner is left with a
@@ -70,10 +113,14 @@ arithmetic proof that the rent levy and the retained building tax do not double-
 the shortest answer to the objection that the combination is confiscatory: it is confiscatory of
 land rent only, by construction.
 
-**3. `land_wealth_destroyed = ubi_pot / i`**, exact for every `phi`. Post-reform land price is
-`L(i+t)(1-phi)/i`, so the wealth destroyed is `L[phi(i+t) - t]/i`, and the annual pot is
-`L[phi(i+t) - t]`. The one-time capitalization loss to landowners equals the present value of the
-dividend stream, to the dollar.
+**3. `land_wealth_destroyed = ubi_pot / i`**, exact for every `phi` and every rent basis, under
+the held-harmless framing. Land price is capitalized rent net of the land tax actually borne:
+`(R − t·L_assessed)/i` before, `(R − phi·R)/i` after. The difference is
+`(phi·R − t·L_assessed)/i = ubi_pot/i`. Where the two bases agree this reduces to the familiar
+`L` and `L(i+t)(1-phi)/i`; where they do not, the assessed sum is *not* the price this model's own
+rent and tax figures imply — a rent surface taxed at a smaller assessed one capitalizes to more
+than either — and using it would break the identity. The one-time capitalization loss to
+landowners equals the present value of the dividend stream, to the dollar.
 
 **Stock and flow are two views of one transfer and must never be added.** Current owners bear the
 one-time loss. The annual levy is borne by whoever holds title — and anyone who buys land after the
@@ -137,6 +184,13 @@ owner-occupied single-unit parcels** — on a 40-unit apartment parcel one owner
 while 40 households collect dividends. The notebook scopes it to OPA `category_code == 1` and uses
 an occupancy-weighted tract household size, not a citywide scalar.
 
+A single threshold in `L` also presumes identity 1. Where the rent basis is not the billed land the
+bill depends on two land values at once and no threshold in either one partitions winners from
+losers, so the notebook compares `tax_change` against the household dividend directly. That is
+exact under either land source and gives the identical answer when the bases match — 76.5% of
+single-family parcels on the TY2026 OPA run, either way. `breakeven_curve.png` still draws the
+closed-form threshold, and the notebook says so when the two diverge.
+
 ## Robustness: what the answer does and does not depend on
 
 **Lead with this.** At full capture under the held-harmless framing, a tract's net position is
@@ -152,15 +206,32 @@ The sign does not involve `i`. And scaling every land value by a constant `k` sc
 > magnitudes but cannot change who wins.** Only *non-uniform* assessment error redistributes.
 
 Section 9 of the notebook demonstrates this rather than claiming it: it re-solves at 3%, 5% and 9%
-and asserts the net-positive tract set is identical. This demotes `i` from a fatal free parameter
+and asserts the net-positive tract set is identical — on the `'opa'` default, where the precondition
+below holds. This demotes `i` from a fatal free parameter
 to a scale knob, and it is the single most important thing to say when someone objects that the
 capitalization rate was picked out of the air.
 
+**The invariance carries identity 1's precondition too.** When the rent is priced off a surface
+that is not the billed land, the net position becomes
+
+```
+net_j = (i+t)*(sum(L_rent)*s_j - L_rent_j)  -  t*(sum(L_opa)*s_j - L_opa_j)
+```
+
+— two land surfaces weighted `(i+t)` and `t` — so raising `i` re-weights them and a tract can cross
+the line, once, at `i* = t(B_j - A_j)/A_j`. Because `t << i` the effect is small but not zero: on
+the TY2026 LYCD run, 5 of 408 tracts (0.9% of residents) move anywhere across 3–9%, and the share
+of residents coming out ahead runs 75.2% → 74.3%. So the claim under a divergent surface is
+*near*-invariance, and the notebook measures it instead of asserting it. The same caveat applies to
+uniform assessment bias there: scaling **both** surfaces by `k` is still sign-preserving, scaling
+only the rent surface is not.
+
 **Ranked sensitivity: land share ≫ `i` ≫ `phi` ≫ `t`.**
 
-- **Land share** dominates everything. The pot is `i × sum(land value)`, so it inherits the land
-  assessment's bias, and the gross-up multiplies that bias by `(i+t)/t ≈ 4.6×`. OPA gives ~45% of
-  improved parcels a land ratio of exactly 0.200 — its default formula, not a market observation.
+- **Land share** dominates everything. The pot is `i × sum(land value)` — `phi·(i+t)·L_rent −
+  t·L_assessed` in general — so it inherits the land assessment's bias, and the gross-up multiplies
+  that bias by `(i+t)/t ≈ 4.6×`. OPA gives ~45% of improved parcels a land ratio of exactly 0.200 —
+  its default formula, not a market observation.
   This is why `LAND_VALUE_SOURCE = 'lycd'` exists: the repo's independent LYCD land surface
   (`zone_psf × lot area`) has a land base roughly 46% larger ($62.6B vs $43.0B at TY2026), and two
   land surfaces bracketing the pot is far more credible than one. The gap is not mostly the
@@ -238,23 +309,27 @@ Read these before quoting any number from this analysis.
     far heavier lift under Pennsylvania law than split-rate. See
     `docs/LVT_LEGAL_DECISIONING_GUIDE.md` and run `/legality-analyzer` separately rather than
     reading anything here as a feasibility claim.
-19. **KNOWN DEFECT — the LYCD run's baseline is not the actual bill.** Under
-    `LAND_VALUE_SOURCE = 'lycd'` the reform math rebuilds each parcel's *current* tax as
-    `t * (model_land + taxable_building)`, i.e. LYCD land against the OPA building. LYCD replaces
-    the land value without re-deriving the building value, so the implied parcel total is not the
-    OPA assessment and the modeled baseline sums to **$2.417B against the actual TY2026 levy of
-    $2.143B — a $274M overstatement**. Nothing asserts: Section 5's revenue validation runs on
-    `taxable_total` (pure OPA) and passes, and the zero-sum check passes because it is internally
-    consistent with the same wrong baseline. Consequences: the `current_tax` and `tax_change`
-    columns in `philadelphia_lvt_ubi_lycd_ty<YEAR>_parcels.csv` are **not** what an owner pays or
-    would pay, and the dividend pot is understated (it credits the taxing bodies land revenue on
-    the larger LYCD base while holding the building tax at the OPA base). Measured impact, TY2026:
-    recomputing against the true baseline raises the pot from $3.131B to $3.406B ($1,965 → $2,138
-    per resident) and moves 4 of 391 tracts across the win/lose line (Spearman 0.9931), so the
-    distributional conclusions survive — but no per-parcel figure from the LYCD run should be
-    quoted. The OPA run is unaffected (there `model_land is taxable_land`, so the baseline is the
-    real levy by construction). Fix: hold the baseline at `t * taxable_total` regardless of
-    `LAND_VALUE_SOURCE`, and re-derive the held-harmless land credit from the actual levy.
+19. **FIXED 2026-08-26 — the LYCD run's baseline was not the actual bill.** Under
+    `LAND_VALUE_SOURCE = 'lycd'` the reform math rebuilt each parcel's *current* tax as
+    `t * (model_land + taxable_building)` — LYCD land against the OPA building. LYCD replaces land
+    without re-deriving buildings, so the implied parcel total was not the OPA assessment and the
+    modeled baseline summed to **$2.417B against the actual TY2026 levy of $2.143B, a $274M (12.8%)
+    overstatement**. Nothing caught it: Section 5's revenue validation runs on `taxable_total`
+    (pure OPA) and passed at +0.00%, and the zero-sum check passed because it was internally
+    consistent with the same wrong baseline. The OPA path was never affected — there `model_land`
+    *is* `taxable_land`, so the baseline was the real levy by construction.
+    **The fix**, per "The baseline, and the held-harmless credit" above: `land_value_col` is now
+    always the assessor's land, the alternative surface goes to `rent_basis_col`, and
+    `baseline_total_col='taxable_total'` makes conflating them raise instead of drift. **Measured
+    effect on the corrected TY2026 LYCD run:** the baseline drops to $2.143B (0.0000% drift); the
+    held-harmless credit is `t × $43.0B = $602M` rather than `t × $62.6B`; the pot rises from
+    $3.131B to $3.406B and the dividend from $1,965 to $2,138 per resident; and 4 of the 391
+    populated tracts cross the win/lose line (5 of 408 counting the unpopulated), with Spearman
+    0.9931 between the old and new per-capita series, so the distributional conclusions published
+    before the fix survive. Anything quoting a **per-parcel** `current_tax` or
+    `tax_change` from an LYCD run generated before 2026-08-26 must be regenerated. Two consequences
+    of the fix are documented above rather than hidden: identity 1 no longer collapses to `i·L`
+    under a divergent surface, and the rate-invariance of the partition becomes *near*-invariance.
 
 ## Running it
 
@@ -275,7 +350,9 @@ primary deliverable), `analysis/data/philadelphia_lvt_ubi_ty<YEAR>_parcels.csv`,
 
 Set `LAND_VALUE_SOURCE = 'lycd'` for the cross-run — it reads
 `analysis/data/philadelphia_lycd_ty<YEAR>.csv`, so run `model_lycd.ipynb` first — and it writes to
-the `philadelphia_lvt_ubi_lycd_ty<YEAR>` slug rather than overwriting the OPA run.
+the `philadelphia_lvt_ubi_lycd_ty<YEAR>` slug rather than overwriting the OPA run. The tracked
+notebook's default stays `'opa'`; flip it in a scratch copy rather than committing the flip, so the
+two runs' outputs cannot be confused for one another.
 
 The magnitude gates in Sections 6 and 7 are the acceptance test for a real run. The arithmetic is
 proven separately and offline by `tests/test_ubi_utils.py`, so anything failing those gates is a
