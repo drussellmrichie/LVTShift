@@ -26,7 +26,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from typing import Optional
+from typing import List, Optional
 from urllib.parse import quote
 
 import geopandas as gpd
@@ -708,14 +708,27 @@ _TILE_ATTRS = [
     'owner_address', 'parcel_url', 'property_category',
 ]
 
+# Shared with scripts/build_philadelphia_webmap.py, which runs the same pipeline
+# through WSL. Keeping the flags in one place stops the two paths from drifting.
+_TIPPECANOE_BASE_ARGS = [
+    '-zg', '--drop-densest-as-needed', '--extend-zooms-if-still-dropping',
+    '--read-parallel', '--force', '--quiet',
+]
 
-def _build_pmtiles(gdf: gpd.GeoDataFrame, out_pmtiles: str, layer: str = 'parcels') -> str:
+
+def _build_pmtiles(gdf: gpd.GeoDataFrame, out_pmtiles: str, layer: str = 'parcels',
+                   attrs: Optional[List[str]] = None,
+                   tippecanoe_args: Optional[List[str]] = None) -> str:
     """Build a PMTiles vector-tile archive from the parcel frame.
 
     Pipeline: write a lean GeoParquet (tile attributes + geometry) → ogr2ogr to
     GeoJSONSeq → tippecanoe to PMTiles. Requires tippecanoe + ogr2ogr on PATH.
+
+    ``attrs`` overrides the default tile attribute allowlist, for callers carrying
+    a schema other than the single-scenario one (e.g. the Philadelphia webmap's
+    multi-scenario tiles). ``tippecanoe_args`` overrides the default flags.
     """
-    keep = [c for c in _TILE_ATTRS if c in gdf.columns]
+    keep = [c for c in (_TILE_ATTRS if attrs is None else attrs) if c in gdf.columns]
     g = gdf[keep + [gdf.geometry.name]].copy()
     if g.crs is None or g.crs.to_epsg() != 4326:
         g = g.to_crs(WGS84)
@@ -728,9 +741,8 @@ def _build_pmtiles(gdf: gpd.GeoDataFrame, out_pmtiles: str, layer: str = 'parcel
                        check=True, capture_output=True, text=True)
         os.makedirs(os.path.dirname(os.path.abspath(out_pmtiles)), exist_ok=True)
         subprocess.run(
-            ['tippecanoe', '-o', out_pmtiles, '-l', layer, '-zg',
-             '--drop-densest-as-needed', '--extend-zooms-if-still-dropping',
-             '--read-parallel', '--force', '--quiet', gj],
+            ['tippecanoe', '-o', out_pmtiles, '-l', layer,
+             *(_TIPPECANOE_BASE_ARGS if tippecanoe_args is None else tippecanoe_args), gj],
             check=True, capture_output=True, text=True,
         )
     except subprocess.CalledProcessError as e:

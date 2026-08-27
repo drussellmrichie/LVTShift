@@ -11,13 +11,24 @@ import pandas as pd
 
 sys.stdout.reconfigure(encoding='utf-8')
 
-REPO = Path('C:/projects/LVTShift')
-OUT = Path(__file__).parent / 'ownership_figs'
+HERE = Path(__file__).parent
+REPO = HERE.parents[2]
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(HERE))
+
+import owner_lib as ol  # noqa: E402
+from lvt.philadelphia import parcel_cache_path  # noqa: E402
+
+# The parcel cache and the model export are both keyed by tax year. Reading an unsuffixed
+# `parcels.gpq` (which no longer exists) against an unsuffixed export is exactly the
+# vintage-mixing the year suffix was introduced to prevent.
+TAX_YEAR = 2026
+OUT = HERE / 'figs'
 OUT.mkdir(exist_ok=True)
 
 # Load parcels (owner names) and model export (categories + tax results)
-parcels = gpd.read_parquet(REPO / 'cities/philadelphia/data/parcels.gpq')
-csv = pd.read_csv(REPO / 'analysis/data/philadelphia.csv', low_memory=False)
+parcels = gpd.read_parquet(parcel_cache_path(TAX_YEAR, REPO / 'cities/philadelphia/data'))
+csv = pd.read_csv(REPO / f'analysis/data/philadelphia_ty{TAX_YEAR}.csv', low_memory=False)
 
 # Join on parcel number, never row index (known trap)
 parcels['join_key'] = parcels['parcel_number'].astype(str).str.lstrip('0')
