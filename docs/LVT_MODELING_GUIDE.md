@@ -97,6 +97,71 @@ For overlapping taxing districts (county / municipality / school), use `model_mu
 
 **Fairness lens.** Beyond who-wins/loses, score the analysis the way an IAAO ratio study would. `assessment_ratio_stats(df, assessed_col, market_col)` measures how (un)fair the *current* base is — median ratio (level), COD (uniformity / horizontal equity), and PRD / PRB (regressivity / vertical equity), each with IAAO-standard flags. `reassessment_equity(df, ...)` stratifies the winners/losers by income quintile, racial-composition band (IAAO §7.3), and value decile (pass `value_col` — the vertical equity of the shift), with optional per-stratum current-base COD (`ratio_cols`) and bootstrap confidence intervals (`n_boot`, so thin strata aren't read as precise). `lvt.viz.reassessment_equity_chart` renders any breakdown (median change + % winners, with the COD gradient overlaid). See Part D of `cities/reading/model_reassessment.ipynb`.
 
+### Land value inputs: why LYCD works — and where the evidence for it has moved
+
+The "Least You Can Do" method assigns every parcel in a zone the *same* land rate
+per square foot (a zone-median rate applied to lot area) rather than estimating a
+parcel-specific land value. See `analysis/political/philadelphia_lycd.md` for the
+algorithm and the GMA hierarchy; this note records *why* the uniform-rate
+assumption is defensible, which the explainers do not.
+
+The justification is empirical, from the sibling `property_valuation_simulations`
+project — findings **F32** (within-neighbourhood spatial structure) and **F45**
+(the estimator-free adjacent-vacant-pair bound) in its
+`reviews/revision_findings.md`, which is where the numbers and their provenance
+live. **Do not copy figures out of it into here.** Cite the finding and re-read
+the source; that file is actively revised and has already superseded the numbers
+this note was first written from (see the caveat at the end).
+
+Measuring the spatial structure of estimated land prices within Philadelphia
+planning neighbourhoods:
+
+- Something like **a quarter** of all land-price variation is *within*
+  neighbourhoods, so a zone is not internally uniform, but the between-zone term
+  dominates it roughly three to one.
+- That within-zone variation is **largely unstructured at the shortest lags** —
+  the within-neighbourhood normalized variogram is close to flat, so two nearly
+  adjoining parcels differ nearly as much as two further apart in the same
+  neighbourhood.
+- Part of what remains is micro-location effect (corner lots, a busy street, odd
+  parcel shape) and part is estimation error, and **no variogram separates the
+  two** — they both land in the nugget.
+
+**So the uniform per-zone rate gives up less than its crudeness suggests.** The
+information that matters most for land value is *between* zones, which is exactly
+what LYCD keeps.
+
+**But do not read that as "there is nothing there to recover."** F45 measured the
+land surface a second way — differencing genuinely adjacent vacant sales, which
+does not go through the estimated surface at all — and found **real spatial
+structure at block scale (roughly 50–400 ft), with a confidence interval that
+excludes zero.** That is *resolvable-in-principle* variation: an estimator with
+enough nearby sales could capture it. It is structure LYCD discards by
+construction, and it sits at exactly the scale a block-level method would work
+on. The honest statement is that the uniform-rate assumption is a defensible
+*simplification with a quantified cost*, not that the discarded part is noise.
+
+**What this does not license.** LYCD is a good estimate of the zone's land rate,
+not of any individual parcel's. Parcel-level LYCD values will be wrong for genuinely
+atypical lots (corner, flag, sliver, contaminated), and those errors do not average
+out for an individual taxpayer even though they largely do for a district-level
+revenue or incidence analysis. Read LYCD outputs as sound in aggregate and weak per
+parcel — which is why the appeals-exposure and outlier framing in the explainers
+matters. It also means zone *boundaries* carry real weight: the same sibling project
+finds accuracy degrades sharply when a value discontinuity is straddled rather than
+respected, so zones should follow real market breaks where they are known.
+
+**Vintage caveat — re-read the source before leaning on this.** The sibling
+project reconciled Philadelphia onto a "frozen recipe" after this note was first
+drafted, and the revision moved the numbers in the direction of *less*
+within-zone variation (the within-neighbourhood variance share dropped by nearly
+half). It also files the broader claim this note rests on — that land is a smooth
+low-dimensional surface — as **refuted in about a third of its cross-city
+sample**, with Berks the clean counterexample. Philadelphia remains one of the
+favourable cities, so the argument above still stands *for Philadelphia*; it does
+not generalise to a new city without re-checking, and LYCD's behaviour in a Berks-
+like market should be assumed worse until measured.
+
 ### Wage-Tax-for-Land-Tax Swap (different tax instrument, not a property-tax reform)
 
 Model eliminating a non-property tax (e.g. Philadelphia's Wage & Earnings Tax) and replacing its revenue with a new, separate, pure land value tax — the existing property tax is left untouched. This is a different modeling paradigm than the reforms above: there's no parcel-level wage data, so the analysis runs at census tract granularity for the eliminated tax and rolls the parcel-level modeled land tax up to the same tracts for comparison. Use `lvt.wage_tax_utils` together with the tract-level fetch functions in `lvt.census_utils` (`get_census_tract_data`, `get_census_tracts_shapefile`, `match_to_census_tracts`, `aggregate_parcels_to_geography`). See **`docs/WAGE_TAX_SWAP_GUIDE.md`** for the full methodology, data sources, and limitations, and `cities/philadelphia/model_wage_tax_swap.ipynb` for the worked example.
