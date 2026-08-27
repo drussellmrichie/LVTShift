@@ -162,8 +162,13 @@ capitalization rate was picked out of the air.
   assessment's bias, and the gross-up multiplies that bias by `(i+t)/t ≈ 4.6×`. OPA gives ~45% of
   improved parcels a land ratio of exactly 0.200 — its default formula, not a market observation.
   This is why `LAND_VALUE_SOURCE = 'lycd'` exists: the repo's independent LYCD land surface
-  (`zone_psf × lot area`) has a land base roughly 26% larger, and two land surfaces bracketing the
-  pot is far more credible than one.
+  (`zone_psf × lot area`) has a land base roughly 46% larger ($62.6B vs $43.0B at TY2026), and two
+  land surfaces bracketing the pot is far more credible than one. The gap is not mostly the
+  default-ratio correction it looks like: OPA category 6 (vacant land) alone accounts for $11.6B
+  of the $19.6B, where LYCD values the land at 4.9× the parcels' entire OPA assessed value, and
+  10.8% of parcels end up with land worth more than their whole assessment. Under full capture
+  that is Limitation 3 (assessment error becomes confiscation), so treat the LYCD run as an
+  upper bracket rather than a better estimate.
 - **`i`** scales the dollars over roughly a 2.3× range across the 3–7% band, and changes nothing
   about the partition.
 - **`phi`** scales the dollars and, below `t/(i+t)` ≈ 0.219, flips the whole reform into a tax cut
@@ -233,6 +238,23 @@ Read these before quoting any number from this analysis.
     far heavier lift under Pennsylvania law than split-rate. See
     `docs/LVT_LEGAL_DECISIONING_GUIDE.md` and run `/legality-analyzer` separately rather than
     reading anything here as a feasibility claim.
+19. **KNOWN DEFECT — the LYCD run's baseline is not the actual bill.** Under
+    `LAND_VALUE_SOURCE = 'lycd'` the reform math rebuilds each parcel's *current* tax as
+    `t * (model_land + taxable_building)`, i.e. LYCD land against the OPA building. LYCD replaces
+    the land value without re-deriving the building value, so the implied parcel total is not the
+    OPA assessment and the modeled baseline sums to **$2.417B against the actual TY2026 levy of
+    $2.143B — a $274M overstatement**. Nothing asserts: Section 5's revenue validation runs on
+    `taxable_total` (pure OPA) and passes, and the zero-sum check passes because it is internally
+    consistent with the same wrong baseline. Consequences: the `current_tax` and `tax_change`
+    columns in `philadelphia_lvt_ubi_lycd_ty<YEAR>_parcels.csv` are **not** what an owner pays or
+    would pay, and the dividend pot is understated (it credits the taxing bodies land revenue on
+    the larger LYCD base while holding the building tax at the OPA base). Measured impact, TY2026:
+    recomputing against the true baseline raises the pot from $3.131B to $3.406B ($1,965 → $2,138
+    per resident) and moves 4 of 391 tracts across the win/lose line (Spearman 0.9931), so the
+    distributional conclusions survive — but no per-parcel figure from the LYCD run should be
+    quoted. The OPA run is unaffected (there `model_land is taxable_land`, so the baseline is the
+    real levy by construction). Fix: hold the baseline at `t * taxable_total` regardless of
+    `LAND_VALUE_SOURCE`, and re-derive the held-harmless land credit from the actual levy.
 
 ## Running it
 
