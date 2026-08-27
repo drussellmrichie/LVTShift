@@ -264,11 +264,27 @@ Read these before quoting any number from this analysis.
    zero, and the assessor would have to publish imputed *rental* values that OPA does not produce
    today. The `implied_land_millage_equivalent` in the summary is a comparability aid against the
    repo's split-rate models, **not** an implementable rate.
-4. **Assessment error becomes confiscation at full capture.** Effective capture on a parcel is
-   `phi × (assessed / true)`; with a realistic coefficient of dispersion a nontrivial tail exceeds
-   100% of true rent. This is the strongest practical argument for stopping near `phi ≈ 0.85`.
-   The module does not quantify the tail — that needs a sales-ratio study the parcel cache has no
-   inputs for.
+4. **Assessment error becomes confiscation at full capture — and `phi` is a weak lever against
+   it.** Effective capture on a parcel is `phi × (assessed / true)`. This limitation used to say
+   the tail could not be quantified without a sales-ratio study; that study now exists
+   (`scripts/vacant_land_ratio_study.py`, `docs/VACANT_LAND_VALUATION.md`), and on vacant land it
+   is not a tail. Measured against observed sale prices, roughly **half** of bare parcels would be
+   charged more than 100% of their true land rent at full capture, and the 99th percentile is
+   assessed near **8× its sale price**.
+
+   The part that changes the policy conclusion: **retreating to `phi ≈ 0.85` barely helps.** It
+   moves the over-charged share by only a few points, because `phi` scales every parcel equally
+   while the problem is dispersion. You would have to halve capture to get the share under a
+   fifth. So the standard argument — stop near 85% *because of* assessment error — is not
+   supported by this repo's own data. Lower capture is a defensible choice for other reasons
+   (preserving sale prices as an assessment check, political headroom), but the fix for
+   confiscation is better assessment, not less capture.
+
+   Caveats on the measurement, both of which cut toward overstating the problem: a ratio study
+   captures sale-price noise as well as assessment error, and the script's sales scrutiny is
+   cruder than `philly_open_avmkit`'s, whose scrutinized study puts the dispersion materially
+   lower. Vacant land is also the worst-assessed class; the improved classes are better. Treat
+   the direction as established and the magnitude as provisional.
 5. **Exempt-land treatment is a policy choice.** `taxable_land` is net of institutional, homestead
    and abatement relief. `RENT_BASIS = 'full'` reaches exempt land and raises the pot, but requires
    changing Pennsylvania exemption law, is fiscally circular for City- and School-owned parcels,
