@@ -121,10 +121,17 @@ Each notebook auto-detects locally cached data and skips re-scraping if a recent
 ```
 lvt/
   lvt_utils.py       Core tax modeling (split-rate, building abatement, exemptions)
+  reassessment.py    Revenue-neutral reassessment: base shifts, IAAO ratio studies
+  ubi_utils.py       Full land-rent capture with a per-capita dividend
+  wage_tax_utils.py  Wage-tax-for-land-tax swap, at census-tract granularity
+  single_tax.py      Static break-even ledger: what land rent could replace
   viz.py             Standard charts and the 7-PNG city report
+  parcel_map.py      Per-parcel GeoParquet export and interactive HTML maps
   cloud_utils.py     Fetch parcel data from county ArcGIS FeatureServers
   census_utils.py    Fetch ACS demographics and spatial-join to parcels
   policy_analysis.py Vacant land, parking lot, and development-barrier analysis
+  transit_utils.py   GTFS feeds, walk-shed isochrones, OSM parking analysis
+  philadelphia.py    Philadelphia tax-year rates and revenue targets, in one place
 
 cities/<city>/model.ipynb    One notebook per city — the reproducible model
 analysis/
@@ -136,6 +143,7 @@ analysis/
   legal/                 LVT legal briefs per city (gitignored — local only)
   explainers/            Model methodology explainers per city (gitignored — local only)
   political/             Political viability briefs per city (gitignored — local only)
+  audits/                Dated, point-in-time audit findings (never edited in place)
 
 scripts/
   run_all_cities.py             Batch notebook runner (patches scrape flags, reports pass/fail)

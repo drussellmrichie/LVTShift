@@ -97,6 +97,29 @@ from lvt.cloud_utils import get_feature_data_with_geometry
 - **Centroid-based spatial joins**: Parcels joined to Census block groups via centroids in EPSG:3857 to avoid boundary edge cases
 - **Census fetching**: TIGERweb block-group request (Layer 1), automatically chunked by tract for very large counties; calls run in a background thread with a 90-second timeout
 
+### The recurring failure shape: a guard that reads a different column than the one that broke
+
+Every silent data defect found in this repo so far has the same shape - a check passes because it
+reads a quantity the bug does not touch, so a wrong number never produces a symptom. When adding a
+guard, ask what it would read if the thing you fear went wrong, and assert against the **billed or
+observed** quantity rather than against a reconstruction.
+
+- **LVT-UBI baseline** (`ubi_utils`) - revenue validation ran on `taxable_total` (pure OPA) and
+  passed at +0.00% while the modeled LYCD baseline was over 12% too high; the zero-sum check was
+  internally consistent with the same wrong baseline. Now guarded by `baseline_total_col`.
+- **DC exemptions** - `TAXRATE` is nonzero on large institutional parcels billed `ANNUALTAX = 0`,
+  so keying exemption off the nominal rate silently admitted billions of assessed value.
+- **Philadelphia lot area** - a pre-computed `Shape__Area` from an EPSG:3857 service is inflated by
+  `1/cos^2(lat)` with nothing downstream to notice. Guarded by a total-area assert.
+- **Parcel cache vintage** - `opa_properties_public` always carries the latest assessment year, so
+  modeling one year's values against another's rates has no visible symptom. Guarded by the
+  year-keyed cache filename.
+- **A guard can itself encode a wrong expectation.** The LVT-UBI LYCD band was derived from the two
+  models' split-rate land *millages* rather than their land *bases* - revenue neutrality at 4:1
+  makes millage vary as `4000*T/(4L+B)`, so the millage ratio is
+  `(4*L_lycd+B_lycd)/(4*L_opa+B_opa)` = 1.257, a different quantity from `L_lycd/L_opa`. The band
+  rejected a correct run. A guard's expected value needs a derivation, not a recollection.
+
 ### Jurisdiction-Specific Patterns
 
 The tax base works differently by state; `model-policy.md` documents all real patterns with code. Examples: Ohio's 35% assessment ratio (Cincinnati), Minnesota Tax Capacity class rates (St. Paul), derived millage from observed bills (Baltimore), dual homestead/non-homestead rates (Rochester), per-levy abatement (Spokane), Texas entity-specific homestead/over-65 exemptions (Bryan, College Station).
@@ -114,13 +137,9 @@ in `model-policy.md`) rather than reconstructed from class + value, since `ANNUA
 DC's per-class rate brackets, the Homestead Deduction, Senior/Disabled 50% relief, and any mixed-use
 blending exactly as billed.
 
-**Exemption trap: key off `ANNUALTAX`, not `TAXRATE`.** A first pass flagged full exemption using
-`TAXRATE == 0`. That missed 35 parcels assessed at $500M–$2.1B each (~$30B total, ~9% of the taxable
-base) — large civic/institutional properties (several with `PAR ...`-prefixed SSLs, suggesting
-federal-reservation-style records) carrying a nonzero nominal Class 2 `TAXRATE` (1.89%) but an actual
-`ANNUALTAX` of $0. Including their assessed value in the split-rate solver's land base collapsed the
-solved millage toward zero and pinned an unrelated category ("Other Commercial") at a false +647%
-ceiling. Fix: flag full exemption off `ANNUALTAX <= 0` (the billed amount), not the nominal rate.
+**Exemption trap: flag full exemption off `ANNUALTAX <= 0` (the billed amount), never `TAXRATE == 0`.**
+Large civic/institutional parcels carry a nonzero nominal Class 2 rate but are billed nothing; letting
+their assessed value into the land base collapses the solved millage. See the guard-shape rule above.
 
 **Relief mechanics** (`HSTDCODE` column, verified empirically against the data): `1` = Homestead
 Deduction only ($91,950 for TY2026); `5` = Homestead + Senior, and `3` = Homestead + Disabled — both
@@ -129,48 +148,22 @@ get an *additional* 50% cut on the computed bill (confirmed: `ANNUALTAX / (CAPCU
 preserves this structure via `model_split_rate_tax`'s `exemption_col` (dollar homestead deduction) and
 `credit_rate_col` (0.5 for codes 3/5) parameters.
 
-**Structural result — residential goes up, not down.** DC currently taxes commercial property (Class 2,
-$1.65–1.89/$100) at roughly double the residential rate (Class 1, $0.85/$100). A single citywide
-land/improvement millage pair solved across all classes together equalizes this differential: the
-solved land millage lands between DC's current residential and commercial rates, so commercial
-buildings get a large cut while residential land — previously taxed at less than half the commercial
-rate — rises to meet the new blended rate. Confirmed by hand-checking the millage math against each
-class's current rate; this is a real consequence of reforming an already-differentiated class-rate
-system into a uniform land-value base, not a modeling artifact.
+**Structural result — residential goes up, not down. This is not a bug.** DC already taxes commercial
+property at roughly double the residential rate, so a single citywide land/improvement millage pair
+solved across all classes equalizes that differential: commercial buildings get a large cut while
+residential land rises to meet the new blended rate. A real consequence of flattening an
+already-differentiated class-rate system, verified against each class's current rate.
 
-**Known revenue gap (~9%, documented, not closed).** Modeled current-tax revenue undershoots DC OCFO's
-FY2026 Real Property Tax estimate ($2,748,983,000; September 2025 Revenue Estimates) by about 9%.
-Ruled out: duplicate SSLs, condo double-counting, OLD- vs NEW-assessment-year confusion (aggregate
-values agree within 0.3%). Leading unconfirmed hypothesis: OCFO's total likely includes Public Utility
-Real Property (assessed by a separate OTR unit, not published on this parcel FeatureServer).
+**Known revenue gap, documented and not closed — do not re-chase it.** Modeled current-tax revenue
+undershoots DC OCFO's Real Property estimate by roughly 9%. Already ruled out: duplicate SSLs, condo
+double-counting, assessment-year confusion. Leading unconfirmed hypothesis: OCFO's total includes
+Public Utility Real Property, assessed by a separate OTR unit and absent from this FeatureServer.
 
-**Vacant/Blighted (Class 3/4) is an anti-abandoned-*building* regime, not an anti-idle-*land* regime —
-a real loophole, confirmed in the data, not just a statutory technicality.** DC Code § 47-813(c-8)(4)/(5)
-defines Class 3/4 as *improved* real property appearing on DOB's vacant/blighted building registry
-(§§ 42-3131.16/.17) — bare, unimproved land is categorically outside the punitive $5-10/$100 rate,
-regardless of how long it sits idle. Checked against the assessor's own `PROPTYPE` vacant-land
-subtypes (`Vacant-True`, `Vacant-Zoning Limits`, `Vacant-False-Abutting`, `Vacant-Permit`,
-`Vacant-Unimproved Parking`, `Vacant-Residential Use` — 11,191 parcels total): only 87 (0.8%) are
-actually billed at the Class 3/4 rate. The other 99.2% are billed at the ordinary Class 1A/2 rate,
-because DC's own use-code confirms they carry no structure. This is also *why* `PROPTYPE`-based
-"Vacant Land" jumps so hard under the reform (+141% median at 4:1, see the model's category table) —
-DC's current system is barely taxing bare land today regardless of the nominal vacant-property rate on
-the books.
-
-Registration exceptions create additional timed safe harbors an owner can lean on: active
-marketing-for-sale/rent exempts a building for <1 year (residential) / <2 years (commercial); a pending
-zoning/historic-preservation application (BZA, Zoning Commission, CFA, HPRB, Mayor's Agent, NCPC)
-exempts it indefinitely while the application sits open; litigation/probate also exempts. Blighted
-(Class 4, $10/$100) vs. merely-vacant (Class 3, $5/$100) turns on physical-condition criteria (weather-
-tight/secured openings, no exterior holes/graffiti/rot) — cheap-maintenance items an owner can address
-just enough to stay at the lower of the two punitive rates.
-
-**The sharpest cliff of all: demolition.** Because Class 3/4 requires *improved* property, an owner
-facing the vacant-building rate on a deteriorating structure can tear it down and immediately drop to
-the ordinary, much lower unimproved-land rate — a large tax cut for producing a vacant lot instead of a
-vacant building. This is a real, data-confirmed perverse incentive worth flagging in any DC-focused
-legal or political brief: DC's vacant-property tax regime, as written, does not reach idle land at all,
-only idle buildings, and rewards clearing the buildings away.
+**Vacant/Blighted (Class 3/4) reaches idle *buildings*, not idle *land*** — a real loophole,
+confirmed in the data, and the reason `PROPTYPE`-based "Vacant Land" jumps so hard under the
+reform: DC barely taxes bare land today whatever the nominal vacant-property rate says. Full
+statutory analysis, the registration safe harbors and the demolition cliff:
+`docs/WASHINGTON_DC_VACANT_LAND.md`.
 
 ### lvt_utils.py (core modeling)
 
@@ -232,7 +225,7 @@ Always apply these in this order. Override 3 before Override 4 matters: the full
 
 **Kernel name:** On Windows, the `cle-venv-new` kernel may not be registered. Check `jupyter kernelspec list` and use the available kernel (e.g., `python3`) for `nbconvert --execute`.
 
-**Philadelphia has four notebooks.** `cities/philadelphia/` contains `model.ipynb` (OPA), `model_lycd.ipynb` (LYCD), `model_post_abatement.ipynb` (OPA post-abatement), and `model_lycd_post_abatement.ipynb` (LYCD post-abatement). All four export to `analysis/data/philadelphia*.csv` with a `parcel_id` column (added via `parcel_id_col='parcel_number'` in `save_standard_export`).
+**The four standard-export Philadelphia notebooks** are `model.ipynb` (OPA), `model_lycd.ipynb` (LYCD), `model_post_abatement.ipynb` and `model_lycd_post_abatement.ipynb`. All four export to `analysis/data/philadelphia*.csv` with a `parcel_id` column (via `parcel_id_col='parcel_number'` in `save_standard_export`). The wage-tax-swap, LVT-UBI, OCD and single-tax notebooks in the same directory each follow a different paradigm and export convention — see their sections below.
 
 **The parcel cache is keyed by tax year: `cities/philadelphia/data/parcels_ty<YEAR>.gpq`.** Build it
 with `python scripts/build_philadelphia_parcel_cache.py --year 2026`; the notebooks only read it and
@@ -257,17 +250,11 @@ skips the assert and labels the run forward-looking; its City/School split is ca
 FY2026 and is not independently confirmed.
 
 **Lot area: never take a pre-computed `Shape__Area` from an ArcGIS service without checking the
-service CRS.** This was a real bug. The DOR parcels FeatureServer is served in **EPSG:3857**, where
-area is inflated by `1/cos²(latitude)` ≈ **1.704×** at Philadelphia's latitude (distance by
-`1/cos(lat)` ≈ 1.31×). The old chain converted `Shape__Are` m²→ft² but never reprojected, so ~5% of
-parcels sat on an area scale 1.7× larger than the 94.5% sourced from OPA's true-ground `total_area` —
-and because the fallback was a point-in-polygon join, every parcel inside one polygon inherited its
-*full* area. Total lot area came to 3.08× the city's actual land area. `scripts/fetch_dor_parcel_areas.py`
-now fetches PIN-keyed areas and de-distorts them with a per-parcel `cos²(latitude)` correction; the
-corrected areas agree with OPA `total_area` at a median ratio of 0.995, and the notebooks assert that
-total lot area stays under 1.5× the city.
+service CRS.** The DOR parcels FeatureServer is EPSG:3857, where area is inflated by `1/cos^2(lat)`.
+`scripts/fetch_dor_parcel_areas.py` fetches PIN-keyed areas and de-distorts them per parcel; the
+notebooks assert total lot area stays under 1.5x the city. See the guard-shape rule above.
 
-Worth knowing *why this barely moved the results*: LYCD land value is `zone_psf × area` where
+Worth knowing *why that barely moved the results*: LYCD land value is `zone_psf x area` where
 `zone_psf` is itself `median(market_value / area)`, so the method is **exactly scale-invariant in lot
 area** — a uniform area error cancels completely. Only *mixed* conventions and *relative* area errors
 matter. Do not infer from the small headline movement that the area layer is unimportant; it is
@@ -391,36 +378,22 @@ convention. Gotchas worth knowing before touching it:
   base vanishes and OPA would have to assess rental values it does not publish.
   `implied_land_millage_equivalent` (= `phi*(i+t)*1000`, 64.0 mills at the defaults, against 13.998
   today and 29.0 under the 4:1 split-rate) is a comparability aid, not an implementable rate.
-- **Reference magnitudes for wiring checks (TY2026, OPA land, `i = 5%`, full capture):**
-  `sum(taxable_land)` ≈ $40–46B, dividend pot ≈ $2.0–2.3B, ≈ $1,250–1,450 per resident, break-even
-  land value ≈ $60–70K against a median rowhome land value near $36K, full-redistribution budget
-  hole ≈ $0.6B. LYCD land runs ~1.46× the OPA base ($62.6B vs $43.0B at TY2026; 1.375× in the
-  original TY2024 export). Do **not** derive that ratio from the two models' split-rate land
-  millages (29.001 OPA vs 23.076 LYCD): revenue neutrality at 4:1 makes millage vary as
-  `4000*T/(4L+B)`, so the millage ratio is `(4*L_lycd+B_lycd)/(4*L_opa+B_opa)` = 1.257, a
-  different quantity. A ~1.26 land-base band was written into the notebook from exactly that
-  mis-derivation and rejected a correct LYCD run. The notebook asserts these; a failure there is
-  a data-wiring problem, not a formula problem — the arithmetic is proven offline by the 31 tests
-  in `tests/test_ubi_utils.py`.
-- **`land_value_col` is the BASELINE, `rent_basis_col` is the rent surface — do not conflate
-  them.** `model_full_land_rent_tax` takes the land the *current* tax is billed on
-  (`taxable_land`, always) separately from the land the *rent* is priced from (`model_land` under
-  `LAND_VALUE_SOURCE = 'lycd'`, `full_assessed_land` under `RENT_BASIS = 'full'`). Passing the
-  rent surface as the baseline rebuilds every parcel's current bill as `t * (model_land +
-  taxable_building)`, which is no assessment anybody was billed on; that was a real defect,
-  overstating the modeled TY2026 LYCD levy by $274M (12.8%) and understating the pot by $275M.
-  Nothing caught it — the revenue validation runs on `taxable_total` (pure OPA) and the zero-sum
-  check is internally consistent with whatever baseline it is handed — so **always pass
-  `baseline_total_col='taxable_total'`**, which verifies the reconstruction against the billed
-  total and raises on drift. The held-harmless land credit is then `t * taxable_land`, the
-  assessor's land revenue, which is forced rather than chosen: the building tax is stipulated
-  unchanged at `t * taxable_building` and the baseline is the real levy, so the credit is the
-  residual. Two consequences under a divergent surface: identity 1 no longer collapses to `i*L`
-  (it is `phi*(i+t)*L_rent - t*L_assessed`; `summary['rent_basis_matches_current_basis']` reports
-  which form applies), and the winner/loser partition becomes *near*- rather than exactly
-  invariant to the capitalization rate (5 of 408 tracts across 3-9% at TY2026). Full derivation
-  and the corrected TY2026 magnitudes: "The baseline, and the held-harmless credit" plus
-  Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
+- **Wiring-check magnitudes live in the notebook's own asserts, not here.** Section 6's magnitude
+  gates and Section 8's zero-sum check are the reference; a failure there is a data-wiring problem,
+  not a formula problem, because the arithmetic is proven offline by `tests/test_ubi_utils.py`.
+  LYCD land runs materially larger than the OPA base — read the current ratio off the notebook, and
+  see the guard-band caution above before assuming a figure for it.
+- **`land_value_col` is the BASELINE, `rent_basis_col` is the rent surface — never conflate
+  them.** The current tax is always rebuilt on the assessor's land; only the rent is priced off
+  `model_land` (`LAND_VALUE_SOURCE = 'lycd'`) or `full_assessed_land` (`RENT_BASIS = 'full'`).
+  Passing the rent surface as the baseline invents a bill nobody was sent, and nothing downstream
+  notices — so **always pass `baseline_total_col='taxable_total'`**, which verifies the
+  reconstruction against the billed total and raises on drift. The held-harmless credit is then
+  `t * taxable_land`, forced rather than chosen: the building tax is stipulated unchanged and the
+  baseline is the real levy, so the credit is the residual. Under a divergent surface identity 1
+  no longer collapses to `i*L` (`summary['rent_basis_matches_current_basis']` reports which form
+  applies) and the winner/loser partition is *near*- rather than exactly rate-invariant.
+  Derivation and magnitudes: Limitation 19 in `docs/LVT_UBI_GUIDE.md`.
 - **Rates come from `tax_year_params()`.** Never hardcode 0.013998.
 
 ### Philadelphia — Single-Tax Static Ledger
@@ -428,7 +401,8 @@ convention. Gotchas worth knowing before touching it:
 `cities/philadelphia/model_single_tax_ledger.ipynb` is a seventh Philadelphia notebook and the
 Tier-1 answer to "can Philadelphia land rent fund abolishing its taxes on labor and capital?"
 Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
-`docs/SINGLE_TAX_LEDGER_SPEC.md` (which also records the build's deviations). Not audited yet.
+`docs/SINGLE_TAX_LEDGER_SPEC.md` (which also records the build's deviations). Audited
+2026-08-26 — findings and disposition in `analysis/audits/`; an independent pass is still owed.
 
 - **`kappa` is a swept parameter, not an estimate.** The whole notebook is a break-even
   calculation: `kappa*` is the uniform share of an abolished tax that would have to reappear
@@ -437,45 +411,38 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
 - **The land tax is absorbed, never abolished.** `T_land` enters Target once for every bundle;
   `validate_ledger` asserts no bundle contains it. Confusing absorbed with abolished is the
   single easiest way to get a wrong answer here.
-- **PICA is a separate line and it is big.** The City General Fund wage figure is *not* the
-  wage tax. Full wage-and-earnings burden = City + PICA; at FY2026 that is $2.048B + $0.731B.
-  The older `model_wage_tax_swap.ipynb` figure ($2.4528B) is a different, earlier vintage —
-  do not mix them. PICA revenue services PICA bonds, so stranding it is a real legal
-  constraint on implementation, not just an accounting line.
+- **PICA is a separate line and it is big.** The City General Fund wage figure is *not* the wage
+  tax — the full burden is City + PICA, and the two PICA lines reconcile exactly to the City's
+  remittance account in QCMR Table R-4 (a test asserts this). `model_wage_tax_swap.ipynb`'s figure
+  is an earlier vintage; do not mix them. PICA revenue services PICA bonds, so stranding it is a
+  legal constraint, not just an accounting line. Amounts and sources:
+  `analysis/data/philadelphia_single_tax_ty2026_lines.csv`.
 - **Use receipts for NPT and BIRT, never rate x base.** Taxpayers credit 60% of BIRT against
   NPT, so published receipts are already net; recomputing either from a base double-counts.
 - **Ledger vintage is FY2026 QCMR current projection**, chosen to match the TY2026 property
   modelling rather than the spec's original FY2024 default. `LEDGER_VINTAGE = 'FY2025'` gives
   actuals as a sensitivity. Two lines (School Income Tax, Use & Occupancy) are `estimate`
   status and print a loud runtime warning; they appear only in bundles B4/B5.
-- **The property split comes from the OPA run only.** Taking `total_current_land_tax` from a
-  LYCD run would price the baseline off a surface nobody was billed on — the substance of
-  Limitation 19, fixed in PR #30. The notebook reads only `taxable_land_value` from the LYCD
-  export, passes `land_value_col='land_opa'` as the baseline for every case, and sets
-  `baseline_total_col='taxable_total'` so a mis-wired baseline raises instead of passing.
-- **At `kappa = 1` and `phi = 1` every bundle's pot is identical** (`phi*R0 + G - T_land`),
-  because abolishing a tax is exactly self-funding under full ATCOR. Both conditions are
-  load-bearing and an audit caught this stated without them: at `phi = 0.85` the pot spread
-  across bundles is $0.868B, because the residual `-(1-phi)*sum(T)` is bundle-dependent, and
-  the road-rent term `G` is easy to drop from the formula. `dividend_vs_kappa.png` is drawn at
-  `phi = 1` and is correct as plotted. Pinned by
+- **The property split comes from the OPA run only.** The notebook reads only
+  `taxable_land_value` from the LYCD export, passes `land_value_col='land_opa'` as the baseline
+  for every case, and sets `baseline_total_col='taxable_total'` — see the LVT-UBI baseline rule
+  above.
+- **The ATCOR convergence result needs both `kappa = 1` and `phi = 1`.** Then every bundle's pot
+  is `phi*R0 + G - T_land`. At `phi < 1` the residual `-(1-phi)*sum(T)` is bundle-dependent and
+  they diverge; the road-rent term `G` is also easy to drop from the formula. Pinned by
   `test_atcor_convergence_holds_only_at_full_capture`.
 - **`kappa* > 1` is NOT "impossible".** It means super-ATCOR capitalization is required.
   Gaffney's EBCOR (Excess Burden Comes Out of Rents) holds that abolishing a *distortionary*
   tax raises rent by more than the revenue foregone, because the excess burden is recovered
   too — exactly the taxes this program abolishes. Do not relabel that region "impossible".
-- **Two of the three kappa scenarios have no source and are named `illustrative_*` on
-  purpose.** `illustrative_low` and `illustrative_mid` are sweep placeholders, not estimates;
-  only `atcor` (kappa = 1 by definition) is defensible. They were briefly named
-  "conservative"/"central", which an audit flagged because the exported CSV then presents an
-  invented parameter as a result. `test_unsourced_kappa_scenarios_keep_non_authoritative_names`
-  prevents the rename.
-- **Accrual convention is billed, by decision.** The property lines are TY2026 billed; the QCMR
-  tax lines are collections (several bundling current + prior year). Billed is the default
-  because it keeps the property lines identical to the LVT-UBI model and preserves the B0
-  wiring check, and because it is the conservative direction — it overstates `kappa*`. Pass
-  `collection_rate=DEFAULT_COLLECTION_RATE` (0.9452, from the repo's own TY2026 billed-vs-
-  projection gap) for the collected basis; that moves `kappa*(B3)` from 0.502 to 0.484.
+- **Two of the three kappa scenarios have no source and are named `illustrative_*` on purpose** —
+  only `atcor` (kappa = 1 by definition) is defensible. Naming them authoritatively makes the
+  exported CSV present an invented parameter as a result;
+  `test_unsourced_kappa_scenarios_keep_non_authoritative_names` prevents the rename.
+- **Accrual convention is billed, by decision.** Property lines are billed; QCMR tax lines are
+  collections (several bundling current + prior year). Billed keeps the property lines identical
+  to the LVT-UBI model, preserves the B0 wiring check, and is the conservative direction — it
+  overstates `kappa*`. Pass `collection_rate=DEFAULT_COLLECTION_RATE` for the collected basis.
 - **Unlike the LVT-UBI model, `i` is not a pure scale knob here.** There it could not change
   who wins; here it moves `kappa*`, because the Target side is denominated in tax dollars that
   do not scale with `i`.
@@ -499,7 +466,11 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 - `docs/WAGE_TAX_SWAP_GUIDE.md` — methodology for the wage-tax-for-land-tax swap paradigm
 - `docs/LVT_UBI_GUIDE.md` — methodology for the LVT + UBI (full land-rent capture) paradigm
 - `docs/LVT_LEGAL_DECISIONING_GUIDE.md` — legal framework behind the legality-analyzer skill
+- `docs/SINGLE_TAX_LEDGER_SPEC.md` — spec for the single-tax static ledger, plus its build deviations
+- `docs/WASHINGTON_DC_VACANT_LAND.md` — why DC's Class 3/4 regime reaches idle buildings, not idle land
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
+- `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
+  a prior audit; a new pass writes a new dated file so the two can be compared.
 
 ## Code Style
 
