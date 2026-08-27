@@ -7,10 +7,17 @@ analysis → Jacob & Livas extension discussion). Delivered:
 `analysis/data/philadelphia_single_tax_ty2026_ledger.csv` (2,880 rows),
 `..._lines.csv`, three charts in `analysis/reports/philadelphia_single_tax/`.
 
-**Still owed: the adversarial audit.** The build has not been audited. Run `/analysis-audit`
-at Opus/Fable level before quoting any κ\* number outside this repo — in particular against
-the ledger (Section 3) and the overlap rules (Section 4), which are where a plausible-but-wrong
-number would hide.
+**Audited 2026-08-26** — `analysis/audits/single_tax_ledger_audit_2026-08-26.md`. Five
+Material and five Advisory findings; all Material findings and A1/A2/A3/A4/A5 were fixed the
+same day. Nothing Blocking; the central B3 result survived every check, and the City-side
+ledger reconciles to QCMR's total tax revenue with a $0 residual.
+
+**Still owed: an INDEPENDENT adversarial pass.** That audit was run by the agent that wrote
+the build, in the same session, so it is a self-check — not the independent verification this
+spec asks for. Re-run `/analysis-audit` with independent subagents or a fresh session before
+quoting any κ* number outside this repo, nominating the audit's M3 (unsourced κ scenarios)
+and M5 (the κ>1 framing) for refutation, since both are judgment calls made by the same
+reasoning that produced the design.
 
 ### Deviations taken during the build
 
@@ -86,7 +93,11 @@ where:
 - `G` = road/curb rents (congestion + curb pricing), a hand-set scenario input, Section 6.
 - `κ*` is exact because κ enters linearly. Headline table: rows = bundles, columns =
   (surface × rent basis × φ), cells = κ*. `κ* ≤ 0` → pencils statically; `κ* > 1` →
-  impossible even at full ATCOR.
+  requires **super-ATCOR** capitalization. **Corrected 2026-08-26:** this originally read
+  "impossible even at full ATCOR", which is not a defensible bound — Gaffney's EBCOR (Excess
+  Burden Comes Out of Rents) holds that abolishing a distortionary tax raises rent by *more*
+  than the revenue foregone, so κ > 1 is possible for exactly the taxes this program
+  abolishes.
 
 Dividend per capita = Pot / population, where population is **read from the existing tract
 export** (`analysis/data/philadelphia_lvt_ubi_ty2026.csv`, sum of `total_pop`) or recomputed

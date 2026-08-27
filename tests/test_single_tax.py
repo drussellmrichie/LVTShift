@@ -14,6 +14,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lvt.single_tax import (  # noqa: E402
     BUNDLES,
+    DEFAULT_COLLECTION_RATE,
+    KAPPA_SCENARIOS_UNSOURCED,
     G_SCENARIOS,
     KAPPA_SCENARIOS,
     LedgerLine,
@@ -79,6 +81,69 @@ def test_no_double_counting_of_wage_and_pica(lines):
     by = {l.key: l.amount for l in lines}
     assert a["t_wage"] == pytest.approx(by["wage_city"] + by["wage_pica"])
     assert by["wage_pica"] > 0, "PICA must not be folded into the City wage line"
+
+
+def test_pica_reconciles_to_the_pica_city_account(lines):
+    """wage_pica + npt_pica must equal QCMR Table R-4's PICA City Account exactly.
+
+    That account is the City's non-tax remittance of PICA collections. If the two tax
+    lines did not sum to it, either a PICA component is missing or the remittance is
+    being counted twice.
+    """
+    by = {l.key: l.amount for l in lines}
+    assert by["wage_pica"] + by["npt_pica"] == pytest.approx(762_688_000.0)
+
+
+def test_npt_capitalizes_through_the_wage_family(lines):
+    """NPT is the self-employment analogue of the wage tax, so it shares its kappa."""
+    a = bundle_amounts(lines, "B4")
+    by = {l.key: l.amount for l in lines}
+    assert a["t_wage"] == pytest.approx(
+        by["wage_city"] + by["wage_pica"] + by["npt_city"] + by["npt_pica"])
+
+
+def test_city_side_reconciles_to_the_qcmr_total(lines):
+    """Completeness guard: every City tax in QCMR Table R-2 is accounted for.
+
+    The eight City tax lines plus QCMR's own city Real Property total must equal
+    Table R-2's TOTAL TAX REVENUE exactly. This is what would catch a City tax being
+    dropped on a vintage change -- validate_ledger cannot, because it checks structure
+    rather than substance.
+    """
+    by = {l.key: l.amount for l in lines}
+    city_keys = ["wage_city", "npt_city", "birt", "rtt", "sales", "amusement",
+                 "beverage", "other_city_tax"]
+    QCMR_CITY_REAL_PROPERTY_TOTAL = 936_062_000.0   # Table R-2, FY2026 projection
+    QCMR_TOTAL_TAX_REVENUE = 4_606_964_000.0
+    total = sum(by[k] for k in city_keys) + QCMR_CITY_REAL_PROPERTY_TOTAL
+    assert total == pytest.approx(QCMR_TOTAL_TAX_REVENUE, abs=1.0), (
+        f"City lines sum to ${total:,.0f} against QCMR's "
+        f"${QCMR_TOTAL_TAX_REVENUE:,.0f} -- a City tax is missing or duplicated")
+
+
+def test_collection_rate_moves_only_the_property_lines(lines):
+    """M4: the accrual convention is a parameter, and it touches nothing else."""
+    coll = build_ledger(LAND_TAX, BUILDING_TAX,
+                        collection_rate=DEFAULT_COLLECTION_RATE)
+    a, b = {l.key: l.amount for l in lines}, {l.key: l.amount for l in coll}
+    for k in a:
+        if k in ("property_land", "property_building"):
+            assert b[k] == pytest.approx(a[k] * DEFAULT_COLLECTION_RATE)
+        else:
+            assert b[k] == pytest.approx(a[k])
+    # Direction: the billed default is the conservative one.
+    r0 = 2_753_379_787.0
+    ks_billed = kappa_star(bundle_amounts(lines, "B3")["target"], r0,
+                           bundle_amounts(lines, "B3")["t_abolished"], phi=1.0)
+    ks_coll = kappa_star(bundle_amounts(coll, "B3")["target"], r0,
+                         bundle_amounts(coll, "B3")["t_abolished"], phi=1.0)
+    assert ks_billed > ks_coll
+
+
+def test_collection_rate_is_validated():
+    for bad in (0.0, -0.5, 1.5):
+        with pytest.raises(ValueError, match="collection_rate"):
+            build_ledger(LAND_TAX, BUILDING_TAX, collection_rate=bad)
 
 
 def test_estimate_lines_are_flagged_not_silent(lines):
@@ -222,6 +287,24 @@ def test_b1_breaks_even_below_full_capitalization(lines):
     assert p_at_1 > 0
 
 
+def test_atcor_convergence_holds_only_at_full_capture(lines):
+    """M1: at kappa=1 all bundles converge to phi*R0 + G - T_land -- but ONLY at phi=1.
+
+    An audit (2026-08-26) found this stated unconditionally in CLAUDE.md, with a formula
+    that also omitted G. Both halves are pinned here.
+    """
+    r0, g = 2_753_379_787.0, 150_000_000.0
+    pots = {phi: [pot(r0, bundle_amounts(lines, b)["target"], phi=phi, g=g,
+                      kappa_amounts=bundle_amounts(lines, b)["t_abolished"])
+                  for b in BUNDLES] for phi in (1.0, 0.85)}
+    # phi = 1: identical across bundles, and equal to R0 + G - T_land.
+    assert max(pots[1.0]) - min(pots[1.0]) == pytest.approx(0.0, abs=1.0)
+    t_land = bundle_amounts(lines, "B0")["t_land"]
+    assert pots[1.0][0] == pytest.approx(r0 + g - t_land)
+    # phi < 1: it does NOT converge. Guard against the claim creeping back unqualified.
+    assert max(pots[0.85]) - min(pots[0.85]) > 1e8
+
+
 # --- sweep ----------------------------------------------------------------------
 
 @pytest.fixture
@@ -280,8 +363,21 @@ def test_road_rent_lowers_kappa_star(lines, r0_cases):
     assert ks["none"] > ks["central"] > ks["high"]
 
 
+def test_unsourced_kappa_scenarios_keep_non_authoritative_names():
+    """An audit (2026-08-26) flagged 'conservative'/'central' as invented parameters
+    dressed as findings in the exported CSV. Names must stay illustrative_*."""
+    assert set(KAPPA_SCENARIOS_UNSOURCED) <= set(KAPPA_SCENARIOS)
+    for name in KAPPA_SCENARIOS_UNSOURCED:
+        assert name.startswith("illustrative_"), (
+            f"{name!r} reads as authoritative; unsourced kappa scenarios must be "
+            "named illustrative_* so the exported columns cannot be misread")
+    # atcor is kappa = 1 by definition, not a guess, so it is allowed a plain name.
+    assert "atcor" not in KAPPA_SCENARIOS_UNSOURCED
+    assert all(v == 1.0 for v in kappa_vector("atcor").values())
+
+
 def test_kappa_scenarios_are_ordered():
-    c, m, a = (kappa_vector("conservative"), kappa_vector("central"),
+    c, m, a = (kappa_vector("illustrative_low"), kappa_vector("illustrative_mid"),
                kappa_vector("atcor"))
     for fam in ("building", "wage", "other"):
         assert c[fam] < m[fam] < a[fam]

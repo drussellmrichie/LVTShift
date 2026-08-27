@@ -16,8 +16,11 @@ an estimate**. `G` is road/curb rent, a hand-set scenario input. `h` is a
 collections/surrender haircut on rent.
 
 kappa* is exact because kappa enters linearly. `kappa* <= 0` means the bundle pencils
-with no capitalization at all; `kappa* > 1` means it cannot be funded even if every
-abolished dollar reappeared as rent.
+with no capitalization at all; `kappa* > 1` means it needs **super-ATCOR** capitalization
+-- more rent than the abolished revenue. That is not impossible: Gaffney's EBCOR (Excess
+Burden Comes Out of Rents) holds that abolishing a distortionary tax raises rent by more
+than the revenue foregone, because the excess burden is recovered too. Never label the
+kappa* > 1 region "impossible".
 
 This module holds no behavioral response of any kind. GE anchoring to Jacob & Livas
 (2026) is Tier 2 and deliberately out of scope -- see spec section 10 for why their
@@ -34,6 +37,26 @@ The two property lines are always TY2026 *billed* amounts taken from the execute
 LVT-UBI model, on both vintages. Under the FY2025 vintage the non-property lines are
 therefore a year behind the property lines; that mix is flagged by
 `vintage_is_consistent()` and must be reported, not silently absorbed.
+
+Accrual convention
+------------------
+The decision, made once and stated here: **the ledger runs on a BILLED basis by default**
+(`collection_rate = 1.0`), which keeps the property lines identical to the LVT-UBI model
+and preserves the B0 wiring check that ties the two notebooks together.
+
+That convention is not free. The QCMR lines are *collections*, and several bundle current
+plus prior year (Wage Total carries $5.4M prior; the BIRT figure is, per Table R-2's own
+footnote, "the aggregate total of current and prior taxes"). So a default run mixes a
+billed property component with collected tax lines.
+
+The direction is known and the magnitude is small: since collections run below billings,
+a billed property line overstates what abolition actually costs the taxing bodies, so the
+default **overstates kappa*** -- results are conservative, not flattering. Pass
+`collection_rate=DEFAULT_COLLECTION_RATE` to put the property lines on a collected basis
+and see the other convention; at TY2026 that moves kappa*(B3) from 0.502 to about 0.477.
+Do not "fix" the mix by grossing the QCMR lines up instead: collections are what a taxing
+body actually loses when a tax is abolished, so collected is the more defensible Target
+basis, and only the tie to the LVT-UBI model argues for billed.
 """
 from __future__ import annotations
 
@@ -47,6 +70,8 @@ __all__ = [
     "LedgerLine",
     "BUNDLES",
     "KAPPA_SCENARIOS",
+    "KAPPA_SCENARIOS_UNSOURCED",
+    "DEFAULT_COLLECTION_RATE",
     "G_SCENARIOS",
     "build_ledger",
     "ledger_frame",
@@ -121,6 +146,11 @@ _TAX_LINES: Dict[str, Dict[str, float]] = {
 _SIT_AMOUNT = 60_000_000.0
 _UO_AMOUNT = 200_000_000.0
 
+# Current-year property collections / billings at TY2026, from the repo's own
+# cross-check: model-implied city-only billing $942,747,555 against the QCMR full-year
+# current projection of $891,102,000, a +5.80% gap. 891102/942748 = 0.9452.
+DEFAULT_COLLECTION_RATE = 0.9452
+
 
 def build_ledger(
     land_tax: float,
@@ -128,6 +158,7 @@ def build_ledger(
     *,
     vintage: str = "FY2026",
     property_vintage: str = "TY2026",
+    collection_rate: float = 1.0,
 ) -> List[LedgerLine]:
     """Assemble the ledger.
 
@@ -140,7 +171,14 @@ def build_ledger(
         Passed in rather than hardcoded so the ledger cannot drift from the model.
     vintage : {'FY2026', 'FY2025'}
         Which QCMR column the non-property tax lines come from.
+    collection_rate : float, default 1.0
+        Scales the two property lines from a billed to a collected basis. The default
+        of 1.0 keeps them billed -- see "Accrual convention" in the module docstring for
+        why, and why the default is the conservative direction. Pass
+        `DEFAULT_COLLECTION_RATE` for the collected-basis run.
     """
+    if not 0 < collection_rate <= 1.0:
+        raise ValueError(f"collection_rate must be in (0, 1], got {collection_rate}")
     if vintage not in SUPPORTED_VINTAGES:
         raise ValueError(
             f"vintage must be one of {SUPPORTED_VINTAGES}, got {vintage!r}. "
@@ -163,9 +201,14 @@ def build_ledger(
             "wage_pica", "Wage & Earnings Tax (PICA)", amt["wage_pica"], vintage,
             accrual, "pica", "labor", qcmr, _RETRIEVED, "verified",
             "Confirmed separate from the City General Fund line in Table R-2's "
-            "'Analysis of City/PICA Wage, Earnings and Net Profits Tax' block. Workers "
-            "pay it, so abolition must replace it (spec 4.3). CAVEAT: PICA revenue "
-            "services PICA bonds; stranding it is a legal constraint on implementation.",
+            "'Analysis of City/PICA Wage, Earnings and Net Profits Tax' block, and "
+            "wage_pica + npt_pica reconciles to the dollar with the PICA City Account "
+            "line in Table R-4 -- so the remittance is not double-counted. Workers pay "
+            "it, so abolition must replace it (spec 4.3). On the bond caveat: Table R-2's "
+            "'Less: PICA Debt Service & Expenses' reads $0 for every FY2026 full-year "
+            "column (vs -$5,364k FY25 actual), consistent with the PICA bonds having "
+            "been retired. Confirm against PICA's own financials before repeating the "
+            "'stranding PICA strands its bondholders' argument.",
         ),
         LedgerLine(
             "npt_city", "Net Profits Tax (City)", amt["npt_city"], vintage,
@@ -181,7 +224,8 @@ def build_ledger(
         # --- capital -------------------------------------------------------------
         LedgerLine(
             "property_building", "Real property tax -- building share",
-            float(building_tax), property_vintage, "billed", "city+school", "capital",
+            float(building_tax) * collection_rate, property_vintage,
+            "billed" if collection_rate == 1.0 else "collected", "city+school", "capital",
             "Executed cities/philadelphia/model_lvt_ubi.ipynb, Section 6 "
             "(summary['total_building_tax']), TY2026 combined rate from "
             "lvt.philadelphia.tax_year_params(2026).",
@@ -230,7 +274,8 @@ def build_ledger(
         # --- absorbed ------------------------------------------------------------
         LedgerLine(
             "property_land", "Real property tax -- land share (ABSORBED)",
-            float(land_tax), property_vintage, "billed", "city+school", "absorbed",
+            float(land_tax) * collection_rate, property_vintage,
+            "billed" if collection_rate == 1.0 else "collected", "city+school", "absorbed",
             "Executed cities/philadelphia/model_lvt_ubi.ipynb, Section 6 "
             "(summary['total_current_land_tax']).",
             _RETRIEVED, "verified",
@@ -293,12 +338,29 @@ BUNDLES: Dict[str, Dict[str, object]] = {
     },
 }
 
-# kappa by line family: (building, wage, other). Spec section 9.
+# kappa by line family: (building, wage, other).
+#
+# WARNING -- read before using any pot_/dividend_ column these produce.
+# `illustrative_low` and `illustrative_mid` have NO empirical source. They are
+# placeholders for a sweep, not estimates, and they are named `illustrative_*` so that
+# nothing downstream can read them as findings. Do not rename them to authoritative
+# labels ("conservative", "central") without attaching a citation to each value --
+# an earlier version used exactly those names and an audit flagged it, because the
+# exported CSV then presents an invented parameter as a result.
+#
+# `atcor` is different: kappa = 1 is the definition of All-Taxes-Come-Out-Of-Rents,
+# not a guess. It is a defensible reference point.
+#
+# Note also that kappa > 1 is NOT impossible. Gaffney's EBCOR (Excess Burden Comes Out
+# of Rents) holds that abolishing a *distortionary* tax raises rent by more than the
+# revenue foregone, because the deadweight loss is recovered too. Treat kappa* > 1 as
+# "requires super-ATCOR capitalization", never as "impossible".
 KAPPA_SCENARIOS: Dict[str, Dict[str, float]] = {
-    "conservative": {"building": 0.50, "wage": 0.10, "other": 0.20},
-    "central": {"building": 0.70, "wage": 0.25, "other": 0.40},
+    "illustrative_low": {"building": 0.50, "wage": 0.10, "other": 0.20},
+    "illustrative_mid": {"building": 0.70, "wage": 0.25, "other": 0.40},
     "atcor": {"building": 1.00, "wage": 1.00, "other": 1.00},
 }
+KAPPA_SCENARIOS_UNSOURCED = ("illustrative_low", "illustrative_mid")
 
 # Road/curb rents, gross of operating cost. Hand-set scenarios, NOT estimates.
 G_SCENARIOS: Dict[str, float] = {
@@ -307,7 +369,10 @@ G_SCENARIOS: Dict[str, float] = {
     "high": 400_000_000.0,      # 250M congestion + 150M curb
 }
 
-_WAGE_KEYS = {"wage_city", "wage_pica"}
+# kappa families. NPT is the self-employment analogue of the wage tax, so it
+# capitalizes through the same channel and belongs in the wage family -- classification
+# ('labor'/'capital') does NOT drive kappa, these key sets do.
+_WAGE_KEYS = {"wage_city", "wage_pica", "npt_city", "npt_pica"}
 _BUILDING_KEYS = {"property_building"}
 
 
