@@ -449,8 +449,10 @@ Module `lvt/single_tax.py`, tests `tests/test_single_tax.py`, spec
   actuals as a sensitivity. Two lines (School Income Tax, Use & Occupancy) are `estimate`
   status and print a loud runtime warning; they appear only in bundles B4/B5.
 - **The property split comes from the OPA run only.** Taking `total_current_land_tax` from a
-  LYCD run would import the Limitation-19 baseline defect. The notebook reads only
-  `taxable_land_value` from the LYCD export.
+  LYCD run would price the baseline off a surface nobody was billed on — the substance of
+  Limitation 19, fixed in PR #30. The notebook reads only `taxable_land_value` from the LYCD
+  export, passes `land_value_col='land_opa'` as the baseline for every case, and sets
+  `baseline_total_col='taxable_total'` so a mis-wired baseline raises instead of passing.
 - **At `kappa = 1` and `phi = 1` every bundle's pot is identical** (`phi*R0 + G - T_land`),
   because abolishing a tax is exactly self-funding under full ATCOR. Both conditions are
   load-bearing and an audit caught this stated without them: at `phi = 0.85` the pot spread

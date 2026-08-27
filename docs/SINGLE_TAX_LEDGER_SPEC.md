@@ -167,9 +167,12 @@ Lines (amounts to be sourced at build time; classifications are decided here):
 - **Surfaces:** OPA (`taxable_land` from `parcels_ty2026.gpq`) and LYCD (land values joined
   from `analysis/data/philadelphia_lycd_ty2026.csv` exactly as `model_lvt_ubi.ipynb`
   Section 3 does — same key normalization, same 1.25–1.65 ratio guard). **The ledger uses
-  only the LYCD export's `taxable_land_value` column**, which is unaffected by the known
-  LYCD-baseline defect (Limitation 19, `docs/LVT_UBI_GUIDE.md`); the defective
-  `current_tax`/`tax_change` columns must not be read. Safe to build before that fix lands.
+  only the LYCD export's `taxable_land_value` column**; its `current_tax`/`tax_change`
+  columns must not be read. Limitation 19 (`docs/LVT_UBI_GUIDE.md`) was fixed 2026-08-26 in
+  PR #30, which split `land_value_col` (the baseline, always the assessor's land) from
+  `rent_basis_col` (the surface the rent is priced from) and added `baseline_total_col` to
+  verify the reconstruction against the billed total. The notebook uses that corrected API
+  and passes the guard.
 - **Bases:** `taxable` (default) and `full` (reaching exempt land) as in `ubi_utils` —
   the `full` basis is a sensitivity, flagged as requiring PA exemption-law change.
 - **Rates:** `i ∈ {0.03, 0.04, 0.05, 0.06, 0.07}` (default 0.05); `φ ∈ {0.85, 1.0}`;
