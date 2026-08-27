@@ -119,9 +119,21 @@ analysis/data/
 analysis/reports/
 analysis/maps/
 
-# TODO: analysis/ownership/ (Philadelphia ownership-concentration scripts, added 2026-07-03)
-# is untracked but not yet ignored here. Decide: add an ignore rule to match the other
-# analysis/ subdirs above, or promote the .py scripts to scripts/ and commit them properly.
+# analysis/ownership/ scripts are tracked deliberately (resolved 2026-08-17): the .py files
+# are committed, their results/ outputs fall under the *.csv / *.json rules below.
+
+# Built report artifacts. The .tex prose and the generator are tracked; everything the
+# generator or LaTeX produces is not — regenerate with:
+#   python <report>/paper/scripts/generate_paper_assets.py && pdflatex Report.tex
+**/paper/*.pdf
+**/paper/figures/*.pdf
+**/paper/tables/*.tex
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.toc
 
 # Common data file extensions
 *.csv
@@ -142,6 +154,9 @@ analysis/maps/
 # *.json is ignored repo-wide above, so it needs an explicit negation.
 !tests/fixtures/
 !tests/fixtures/*.json
+
+# Report letterhead logos are source assets, not generated output — same *.png exception.
+!**/paper/figures/ppi-logo.png
 
 # Philadelphia webmap build staging
 analysis/webmap/
