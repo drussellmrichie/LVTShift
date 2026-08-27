@@ -12,8 +12,10 @@ city/school taxes on labor and capital:
 the taxing bodies must be made whole for it out of the rent levy, so it enters Target
 exactly once and never appears in an abolition bundle. `kappa_j` is the fraction of
 abolished tax `j` that reappears as site rent (ATCOR); it is a **swept parameter, not
-an estimate**. `G` is road/curb rent, a hand-set scenario input. `h` is a
-collections/surrender haircut on rent.
+an estimate**, though `KAPPA_BOUNDS` now brackets each family with published
+capitalization and incidence estimates (see `docs/KAPPA_CAPITALIZATION_EVIDENCE.md`).
+`G` is net-new road/curb rent, sourced from the sibling cordon-pricing model's run
+artifacts. `h` is a collections/surrender haircut on rent.
 
 kappa* is exact because kappa enters linearly. `kappa* <= 0` means the bundle pencils
 with no capitalization at all; `kappa* > 1` means it needs **super-ATCOR** capitalization
@@ -69,10 +71,17 @@ import pandas as pd
 __all__ = [
     "LedgerLine",
     "BUNDLES",
+    "KappaSource",
+    "KappaBound",
+    "KAPPA_BOUNDS",
     "KAPPA_SCENARIOS",
     "KAPPA_SCENARIOS_UNSOURCED",
+    "kappa_bounds_frame",
     "DEFAULT_COLLECTION_RATE",
+    "RoadRentComponent",
+    "G_COMPONENTS",
     "G_SCENARIOS",
+    "road_rent_frame",
     "build_ledger",
     "ledger_frame",
     "validate_ledger",
@@ -340,33 +349,359 @@ BUNDLES: Dict[str, Dict[str, object]] = {
 
 # kappa by line family: (building, wage, other).
 #
-# WARNING -- read before using any pot_/dividend_ column these produce.
-# `illustrative_low` and `illustrative_mid` have NO empirical source. They are
-# placeholders for a sweep, not estimates, and they are named `illustrative_*` so that
-# nothing downstream can read them as findings. Do not rename them to authoritative
-# labels ("conservative", "central") without attaching a citation to each value --
-# an earlier version used exactly those names and an audit flagged it, because the
-# exported CSV then presents an invented parameter as a result.
+# Every value below traces to a published estimate. This replaced two invented
+# scenarios (`illustrative_low`/`illustrative_mid`) that an audit (2026-08-26, finding
+# M3) flagged as unsourced parameters shipped in the export as if they were results.
+# Full evidence base, mapping derivation and caveats: docs/KAPPA_CAPITALIZATION_EVIDENCE.md
 #
-# `atcor` is different: kappa = 1 is the definition of All-Taxes-Come-Out-Of-Rents,
-# not a guess. It is a defensible reference point.
+# THE MAPPING. kappa_j is the share of abolished tax j's *revenue* that reappears as
+# annual site rent. The literature measures two nearby objects:
 #
-# Note also that kappa > 1 is NOT impossible. Gaffney's EBCOR (Excess Burden Comes Out
-# of Rents) holds that abolishing a *distortionary* tax raises rent by more than the
-# revenue foregone, because the deadweight loss is recovered too. Treat kappa* > 1 as
-# "requires super-ATCOR capitalization", never as "impossible".
-KAPPA_SCENARIOS: Dict[str, Dict[str, float]] = {
-    "illustrative_low": {"building": 0.50, "wage": 0.10, "other": 0.20},
-    "illustrative_mid": {"building": 0.70, "wage": 0.25, "other": 0.40},
-    "atcor": {"building": 1.00, "wage": 1.00, "other": 1.00},
-}
-KAPPA_SCENARIOS_UNSOURCED = ("illustrative_low", "illustrative_mid")
+#   'capitalization_rate'        -- the share of the present value of a tax change
+#       that shows up in the asset price. Structures are reproducible and supplied at
+#       construction cost, so once supply has adjusted a fully capitalized change to a
+#       tax on structures accrues to the non-reproducible factor, the site. Maps to
+#       kappa directly.
+#   'landowner_incidence_share'  -- theta, the share of the tax BURDEN borne by
+#       landowners. kappa = theta * (burden / revenue), and burden >= revenue whenever
+#       the tax is distortionary. Setting kappa = theta therefore UNDERSTATES kappa;
+#       it is the conservative direction (it understates the pot, never the reverse).
+#       That gap is exactly Gaffney's EBCOR, below.
+#
+# kappa > 1 is NOT impossible: EBCOR (Excess Burden Comes Out of Rents) holds that
+# abolishing a *distortionary* tax raises rent by more than the revenue foregone,
+# because the deadweight loss is recovered too. `building`'s upper bound is a published
+# point estimate slightly above 1, which is the concrete form of that point. Treat
+# kappa* > 1 as "requires super-ATCOR capitalization", never as "impossible".
 
-# Road/curb rents, gross of operating cost. Hand-set scenarios, NOT estimates.
+
+@dataclass(frozen=True)
+class KappaSource:
+    """One published estimate standing behind a kappa bound."""
+
+    citation: str
+    value: float
+    basis: str          # 'capitalization_rate' | 'landowner_incidence_share' | 'theory'
+    setting: str        # jurisdiction and instrument actually measured
+    directness: str     # 'direct' (same instrument, comparable setting) | 'transferred'
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class KappaBound:
+    """Published low/high bracket for one kappa family."""
+
+    family: str
+    low: float
+    high: float
+    low_source: KappaSource
+    high_source: KappaSource
+    corroborating: Tuple[KappaSource, ...] = ()
+    note: str = ""
+
+
+_COSTE_2024 = KappaSource(
+    citation=("Coste, Jonah (2024), 'Capitalization of Property Tax Incentives: "
+              "Evidence From Philadelphia', FHFA Staff Working Paper 24-01. "
+              "https://www.fhfa.gov/papers/wp2401.aspx"),
+    value=1.006,
+    basis="capitalization_rate",
+    setting="Philadelphia's 10-year construction abatement, residential sales 1980-2023",
+    directness="direct",
+    note=("Preferred specification: 100.6% initial capitalization, 95% CI 86.0-115.2%; "
+          "78.6-125.5% once discount-rate uncertainty (r-g in 1%-5%) is carried. Same "
+          "city, same tax, and the same abatement this repo already models. Coste "
+          "measures capitalization into the whole home price, not a land/structure "
+          "split; for new construction with elastic structure supply the premium "
+          "accrues to the site, which is the mapping assumed here."),
+)
+_LOFFLER_SIEGLOCH_2021 = KappaSource(
+    citation=("Loffler, Max and Sebastian Siegloch (2021), 'Welfare Effects of Property "
+              "Taxation', IZA DP No. 14195. https://docs.iza.org/dp14195.pdf"),
+    value=0.0,
+    basis="landowner_incidence_share",
+    setting="5,200 German municipal property-tax reforms, rental and sales listings",
+    directness="direct",
+    note=("Gross rents rise to full pass-through by year three, net rents revert to "
+          "the pre-reform level, and offered sales prices show no significant "
+          "medium-run effect -- i.e. landowners end up bearing ~none of it. They also "
+          "report the prior US range as 0-115% shifted onto renters. Caveat: the German "
+          "Grundsteuer runs on a frozen 1964/1935 base, so it is a weaker analogue of a "
+          "US ad-valorem tax on structures than Coste is."),
+)
+_LYU_2024 = KappaSource(
+    citation=("Lyu, Xueying (2024), 'Revisiting property tax capitalization', "
+              "Regional Science and Urban Economics 108. "
+              "https://doi.org/10.1016/j.regsciurbeco.2024.104028"),
+    value=0.71,
+    basis="capitalization_rate",
+    setting="Shanghai progressive property-tax pilot, DiD across neighborhoods",
+    directness="direct",
+    note="Reported as a floor: 'at least 71% of expected property tax liabilities'.",
+)
+_SUAREZ_SERRATO_ZIDAR_2016 = KappaSource(
+    citation=("Suarez Serrato, Juan Carlos and Owen Zidar (2016), 'Who Benefits from "
+              "State Corporate Tax Cuts? A Local Labor Markets Approach with "
+              "Heterogeneous Firms', American Economic Review 106(9), 2582-2624. "
+              "https://doi.org/10.1257/aer.20141702"),
+    value=0.25,
+    basis="landowner_incidence_share",
+    setting="US state corporate tax rates and apportionment rules, structural estimation",
+    directness="direct",
+    note=("'firm owners bear roughly 40 percent of the incidence, while workers and "
+          "landowners bear 30-35 percent and 25-30 percent, respectively.' The 2023 "
+          "corrected model puts landowners at 26.8%. Shares of the welfare change, not "
+          "of revenue -- see the mapping note above."),
+)
+# Same study, but used for a tax it did not measure. Kept as its own object so the
+# exported bounds table shows 'transferred' on the wage row and 'direct' on the other
+# row, rather than one directness label doing duty for two different uses.
+_SSZ_TRANSFERRED_TO_WAGE = KappaSource(
+    citation=_SUAREZ_SERRATO_ZIDAR_2016.citation,
+    value=0.25,
+    basis="landowner_incidence_share",
+    setting="US state corporate tax (NOT a wage tax)",
+    directness="transferred",
+    note=("Applied to the wage family only because it is the nearest structural "
+          "estimate of the landowner share of a mobile-base subfederal tax. A wage tax "
+          "and a corporate tax reach land through different channels, and Philadelphia's "
+          "reaches non-resident commuters as well, so the transfer is an assumption, "
+          "not a measurement. " + _SUAREZ_SERRATO_ZIDAR_2016.note),
+)
+_PERFECT_MOBILITY = KappaSource(
+    citation=("Brulhart, Marius, Jayson Danton, Raphael Parchet and Jorg Schlapfer "
+              "(2025), 'Who Bears the Burden of Local Taxes?', American Economic "
+              "Journal: Economic Policy 17(1), 464-505, p. 468. "
+              "https://doi.org/10.1257/pol.20220462"),
+    value=1.0,
+    basis="theory",
+    setting="benchmark, not an estimate",
+    directness="direct",
+    note=("'With perfect mobility, the incidence of local taxes is fully borne by "
+          "landowners, the immobile factor.' The paper's own contribution is that "
+          "moving is costly, so realised incidence is below this ceiling -- it is cited "
+          "here as the upper bound, which is what it is."),
+)
+_BRULHART_2025 = KappaSource(
+    citation=("Brulhart, Danton, Parchet and Schlapfer (2025), AEJ: Economic Policy "
+              "17(1), 464-505. https://doi.org/10.1257/pol.20220462"),
+    value=-0.281,
+    basis="capitalization_rate",
+    setting="Swiss municipal income taxes, border-pair design with instrumented rates",
+    directness="direct",
+    note=("Structural landlord incidence eta_p,tau* = -0.281 (s.e. 0.021); reduced-form "
+          "housing-price elasticity -0.30. An elasticity, NOT a revenue share -- "
+          "converting it would need the housing-value-to-income-tax-revenue ratio in "
+          "their setting, which the paper does not report. Cited as corroboration of "
+          "sign and order of magnitude only."),
+)
+_BASTEN_2017 = KappaSource(
+    citation=("Basten, Christoph, Maximilian von Ehrlich and Andrea Lassmann (2017), "
+              "'Income Taxes, Sorting and the Costs of Housing: Evidence from Municipal "
+              "Boundaries in Switzerland', The Economic Journal 127(601), 653-687. "
+              "https://doi.org/10.1111/ecoj.12489"),
+    value=0.26,
+    basis="capitalization_rate",
+    setting="Swiss municipal income taxes, apartment-level boundary discontinuity",
+    directness="direct",
+    note=("Income tax elasticity of rents ~0.26 in absolute value; the boundary design "
+          "halves conventional estimates, and about a third of the effect is income "
+          "sorting rather than capitalization. Again an elasticity, not a share."),
+)
+_ALBOUY_2009 = KappaSource(
+    citation=("Albouy, David (2009), 'The Unequal Geographic Burden of Federal "
+              "Taxation', Journal of Political Economy 117(4), 635-667. "
+              "https://doi.org/10.1086/605309"),
+    value=float("nan"),
+    basis="capitalization_rate",
+    setting="US federal taxation of nominal wages across cities, simulation",
+    directness="transferred",
+    note=("Simulated long-run effect of the wage-tax wedge in high-wage cities: land "
+          "prices -21% against housing prices -5%. Evidence that a tax on wages lands "
+          "disproportionately on land, but federal rather than local and reported as "
+          "price levels, so it pins no share."),
+)
+_FUEST_PEICHL_SIEGLOCH_2018 = KappaSource(
+    citation=("Fuest, Clemens, Andreas Peichl and Sebastian Siegloch (2018), 'Do Higher "
+              "Corporate Taxes Reduce Wages? Micro Evidence from Germany', American "
+              "Economic Review 108(2), 393-418. https://doi.org/10.1257/aer.20130570"),
+    value=0.5,
+    basis="landowner_incidence_share",
+    setting="20-year panel of German municipal business tax rates",
+    directness="direct",
+    note=("Workers bear about half the burden of the municipal business tax; the "
+          "residual is split between firm owners and landowners, so this caps the "
+          "landowner share well below 1 for a local business tax. Value recorded is the "
+          "WORKER share, not a landowner share."),
+)
+_KOPCZUK_MUNROE_2015 = KappaSource(
+    citation=("Kopczuk, Wojciech and David J. Munroe (2015), 'Mansion Tax: The Effect "
+              "of Transfer Taxes on the Residential Real Estate Market', American "
+              "Economic Journal: Economic Policy 7(2), 214-257. "
+              "https://doi.org/10.1257/pol.20130361"),
+    value=float("nan"),
+    basis="landowner_incidence_share",
+    setting="NY/NJ 1% 'mansion tax' notch at $1M",
+    directness="direct",
+    note=("Incidence 'falls on sellers, may exceed the value of the tax' -- i.e. a "
+          "transfer tax is borne by the asset owner and plausibly at theta > 1, the "
+          "EBCOR pattern. Local to a notch, so it does not generalise to the whole RTT "
+          "base; it is the reason this family's published band should be read as one "
+          "study's range and not as a bound on the RTT component."),
+)
+
+KAPPA_BOUNDS: Dict[str, KappaBound] = {
+    "building": KappaBound(
+        family="building",
+        low=0.0,
+        high=1.006,
+        low_source=_LOFFLER_SIEGLOCH_2021,
+        high_source=_COSTE_2024,
+        corroborating=(_LYU_2024,),
+        note=("The widest band of the three, and the disagreement is real rather than "
+              "noise: the best-identified US estimate is full capitalization and the "
+              "best-identified European one is none. The Philadelphia estimate is the "
+              "high end, which matters for how this band should be read here."),
+    ),
+    "wage": KappaBound(
+        family="wage",
+        low=0.25,
+        high=1.0,
+        low_source=_SSZ_TRANSFERRED_TO_WAGE,
+        high_source=_PERFECT_MOBILITY,
+        corroborating=(_BRULHART_2025, _BASTEN_2017, _ALBOUY_2009),
+        note=("WEAKEST LINK IN THE EVIDENCE BASE. No published study reports the "
+              "landowner share of a local wage or earnings tax. The low bound is "
+              "TRANSFERRED from the corporate-tax setting -- the nearest structural "
+              "estimate of a mobile-base subfederal tax -- and the high bound is the "
+              "perfect-mobility ceiling, not an estimate. The corroborating entries "
+              "establish that local income taxes do capitalize with the expected sign "
+              "and a non-trivial magnitude; none of them pins a revenue share. This is "
+              "also the largest family in every bundle from B2 up."),
+    ),
+    "other": KappaBound(
+        family="other",
+        low=0.25,
+        high=0.30,
+        low_source=_SUAREZ_SERRATO_ZIDAR_2016,
+        high_source=_SUAREZ_SERRATO_ZIDAR_2016,
+        corroborating=(_FUEST_PEICHL_SIEGLOCH_2018, _KOPCZUK_MUNROE_2015),
+        note=("Narrow because it is ONE study's reported range (landowners 25-30%), not "
+              "because the literature has converged. Do not read it as a confidence "
+              "interval on the family: it covers BIRT, SIT, U&O and RTT together, and "
+              "the transfer-tax evidence points materially higher for the RTT slice."),
+    ),
+}
+
+KAPPA_SCENARIOS: Dict[str, Dict[str, float]] = {
+    "lit_low": {f: b.low for f, b in KAPPA_BOUNDS.items()},
+    "lit_high": {f: b.high for f, b in KAPPA_BOUNDS.items()},
+    "atcor": {f: 1.0 for f in KAPPA_BOUNDS},
+}
+# Empty by construction: every scenario above is derived from KAPPA_BOUNDS, and every
+# bound carries its citation. Kept so the audit's rule stays enforceable if a bare
+# scenario is ever added back.
+KAPPA_SCENARIOS_UNSOURCED: Tuple[str, ...] = ()
+
+# Road/curb rents: NET-NEW annual revenue from pricing the public right-of-way.
+#
+# Replaced the original hand-set scenarios (central 150M = 100M congestion + 50M curb;
+# high 400M = 250M congestion + 150M curb) on 2026-08-27. Two things were wrong with
+# them, both found by checking against the sibling models:
+#
+#   1. The curb component double-counted. Philadelphia already prices some curb, and
+#      Act 84 of 2012 directs a $35M/yr minimum PPA payment to the City General Fund
+#      with the residual net on-street revenue going to the School District -- the two
+#      bodies this ledger holds harmless. Gross curb revenue in Supply would let the
+#      same dollar fund both today's spending and the abolition. Only the INCREMENT
+#      over the current remittance is new supply, and no one has estimated it, so the
+#      curb component is now zero and carries its reason.
+#   2. The high congestion figure (250M) exceeded the top of the sibling model's own
+#      revenue ladder -- more than its $25 high-deterrence scenario, which is already
+#      past the revenue-maximizing toll.
+#
+# PROVENANCE CAVEAT. The congestion figures come from a sibling repo, not from a
+# published source or from this repo's pipeline. That repo was audited 2026-04-22 and
+# the audit's first finding was hand-estimated revenue numbers that had drifted from
+# actual runs by 36-44%; the values below are read from the committed run artifacts
+# (`runs/<scenario>/<ts>/stage_09_revenue.json`), not from its prose. Its own README
+# calls the outputs "illustrative ranges based on transferred parameters -- not
+# forecasts". Status is therefore 'modeled_sibling', never 'verified'.
+
+
+@dataclass(frozen=True)
+class RoadRentComponent:
+    """One net-new road/curb rent line. Same source discipline as LedgerLine."""
+
+    key: str
+    name: str
+    amount: float
+    source: str
+    retrieved: str
+    status: str         # 'modeled_sibling' | 'estimate' | 'excluded'
+    note: str = ""
+
+
+_CORDON_RUN = (
+    "philly-cordon-pricing (Progress-and-Poverty-Institute), run artifact "
+    "runs/{scen}/{ts}/stage_09_revenue.json, net_revenue_annual_usd p50, "
+    "steady-state (Year 5+), net of operating cost, ~7% evasion and ~12% exemption "
+    "discounts; git_sha 976c95ceeeb5. Repo audit: AUDIT.md dated 2026-04-22."
+)
+_G_RETRIEVED = "2026-08-27"
+
+G_COMPONENTS: Dict[str, Tuple[RoadRentComponent, ...]] = {
+    "none": (),
+    "central": (
+        RoadRentComponent(
+            key="cordon_nyc_calibrated",
+            name="Center City cordon toll, $9/entry (NYC-calibrated)",
+            amount=83_657_804.0,
+            source=_CORDON_RUN.format(scen="nyc_calibrated", ts="20260806T194631Z"),
+            retrieved=_G_RETRIEVED,
+            status="modeled_sibling",
+            note=("p10 $67.9M / p50 $83.7M / p90 $102.0M over 1,000 draws. Sits near the "
+                  "elbow of that model's revenue curve. Philadelphia prices no cordon "
+                  "today, so the whole amount is net-new rent."),
+        ),
+    ),
+    "high": (
+        RoadRentComponent(
+            key="cordon_high_deterrence",
+            name="Center City cordon toll, $25/entry (high deterrence)",
+            amount=175_290_000.0,
+            source=_CORDON_RUN.format(scen="high_deterrence", ts="20260806T194632Z"),
+            retrieved=_G_RETRIEVED,
+            status="modeled_sibling",
+            note=("p10 $138.8M / p50 $175.3M / p90 $218.5M. Past the revenue-maximizing "
+                  "toll ($15, p50 $142.6M) in that model, so it is the ceiling of the "
+                  "published ladder rather than a plausible policy."),
+        ),
+    ),
+}
+
+_CURB_EXCLUDED = RoadRentComponent(
+    key="curb_pricing",
+    name="Curb parking rent (EXCLUDED, not zero)",
+    amount=0.0,
+    source=("philly-parking-benefit-districts (Progress-and-Poverty-Institute), README "
+            "'Key calibration numbers' and research/demand-based-curb-parking-pricing-"
+            "model-for-philadelphia---claude-2026-04-28.md; Act 84 of 2012."),
+    retrieved=_G_RETRIEVED,
+    status="excluded",
+    note=("Status-quo on-street revenue is ~$40-50M/yr, but Act 84 of 2012 already "
+          "routes a $35M/yr minimum to the City General Fund and the residual to the "
+          "School District, so it is not net-new supply -- only the increment from "
+          "efficient pricing would be, and no citywide estimate of that exists on real "
+          "data. The sibling model still runs on synthetic transactions (PPA meter data "
+          "pending an RTKL request) and its efficient-pricing scenarios return LESS "
+          "revenue than status quo on that synthetic baseline. Excluded until there is "
+          "something to cite; the direction of the omission is conservative."),
+)
+
 G_SCENARIOS: Dict[str, float] = {
-    "none": 0.0,
-    "central": 150_000_000.0,   # 100M congestion + 50M curb
-    "high": 400_000_000.0,      # 250M congestion + 150M curb
+    name: float(sum(c.amount for c in comps))
+    for name, comps in G_COMPONENTS.items()
 }
 
 # kappa families. NPT is the self-employment analogue of the wage tax, so it
@@ -444,6 +779,64 @@ def bundle_amounts(lines: Sequence[LedgerLine], bundle: str) -> Dict[str, float]
     total = sum(fam.values())
     return {"t_abolished": total, "t_land": t_land,
             "target": total + t_land, **{f"t_{k}": v for k, v in fam.items()}}
+
+
+def road_rent_frame(
+    components: Optional[Dict[str, Tuple[RoadRentComponent, ...]]] = None,
+    include_excluded: bool = True,
+) -> pd.DataFrame:
+    """Road/curb rent components behind each G level, one row per component.
+
+    Parameters
+    ----------
+    components : dict of str -> tuple of RoadRentComponent, optional
+        Defaults to G_COMPONENTS.
+    include_excluded : bool, default True
+        Append the curb line that is deliberately carried at zero. It is included by
+        default because an omission nobody can see reads as an omission nobody made.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: g_level, key, name, amount, status, source, retrieved, note.
+    """
+    components = G_COMPONENTS if components is None else components
+    rows: List[Dict[str, object]] = []
+    for level, comps in components.items():
+        for c in comps:
+            rows.append({"g_level": level, **asdict(c)})
+    if include_excluded:
+        rows.append({"g_level": "(all)", **asdict(_CURB_EXCLUDED)})
+    return pd.DataFrame(rows)
+
+
+def kappa_bounds_frame(bounds: Optional[Dict[str, KappaBound]] = None) -> pd.DataFrame:
+    """The published bracket behind each kappa family, one row per bound.
+
+    Parameters
+    ----------
+    bounds : dict of str -> KappaBound, optional
+        Defaults to KAPPA_BOUNDS.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns: family, edge ('low'|'high'), kappa, basis, directness, setting,
+        citation, note. Rendered by the notebook so the exported scenarios can be
+        traced to a source without opening this module.
+    """
+    bounds = KAPPA_BOUNDS if bounds is None else bounds
+    rows: List[Dict[str, object]] = []
+    for fam, b in bounds.items():
+        for edge, value, src in (("low", b.low, b.low_source),
+                                 ("high", b.high, b.high_source)):
+            rows.append({
+                "family": fam, "edge": edge, "kappa": value,
+                "basis": src.basis, "directness": src.directness,
+                "setting": src.setting, "citation": src.citation,
+                "note": src.note,
+            })
+    return pd.DataFrame(rows)
 
 
 def kappa_vector(scenario: str) -> Dict[str, float]:
