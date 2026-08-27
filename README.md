@@ -152,7 +152,7 @@ scripts/
 
 .claude/skills/      Agent skill files (read by the agent during pipeline execution)
 .claude/commands/    Slash-command wrappers for the four user-facing skills
-docs/                LVT_MODELING_GUIDE.md and LVT_LEGAL_DECISIONING_GUIDE.md
+docs/                Methodology guides and per-paradigm specs (see Modeling Approaches)
 ```
 
 **Data flow:**
@@ -168,7 +168,7 @@ Fetch parcels (cloud_utils)
 
 ## Modeling Approaches
 
-Two primary LVT scenarios are implemented, both revenue-neutral:
+Two **revenue-neutral rate-shift** scenarios are the default path for a city model:
 
 ### Split-Rate Tax
 
@@ -220,6 +220,22 @@ Cities require different treatment of the tax base before modeling. Examples:
 | Entity-specific exemptions | Bryan / College Station | Texas homestead and over-65 exemptions per taxing entity |
 
 See `model-policy.md` or `docs/LVT_MODELING_GUIDE.md` for code examples of each.
+
+### Other paradigms
+
+Four further models answer different questions and do **not** follow the revenue-neutral
+split-rate template. Each has its own methodology document:
+
+| Model | Question | Module | Doc |
+|---|---|---|---|
+| Revenue-neutral reassessment | What if assessments were accurate, with no LVT at all? | `lvt/reassessment.py` | — |
+| Wage-tax swap | Replace the Wage & Earnings Tax with a land-only tax, at tract granularity | `lvt/wage_tax_utils.py` | `docs/WAGE_TAX_SWAP_GUIDE.md` |
+| LVT + UBI | Capture 100% of land rent and pay the residual as a per-capita dividend | `lvt/ubi_utils.py` | `docs/LVT_UBI_GUIDE.md` |
+| Single-tax ledger | Which taxes on labor and capital could land rent replace, and at what capitalization? | `lvt/single_tax.py` | `docs/SINGLE_TAX_LEDGER_SPEC.md`, `docs/KAPPA_CAPITALIZATION_EVIDENCE.md` |
+
+The LVT + UBI and single-tax models are deliberately **not** revenue-neutral — raising more
+than today's levy is the reform — so they skip `save_standard_export()` and the 7-PNG city
+report, and use their own export slugs.
 
 ---
 
