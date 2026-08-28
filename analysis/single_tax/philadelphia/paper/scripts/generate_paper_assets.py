@@ -252,7 +252,9 @@ def fig_ledger(lines):
     ax.bar([label[c] for c in g.index], g.values,
            color=[colour[c] for c in g.index], width=0.62)
     for i, v in enumerate(g.values):
-        ax.text(i, v + 0.04, f"${v:,.2f}B", ha="center", fontsize=9,
+        # 1 dp, matching usd_b in the prose: "$2.9B" in the abstract and "$2.95B" on
+        # the facing figure is a reader-visible inconsistency for the same quantity.
+        ax.text(i, v + 0.04, f"${v:,.1f}B", ha="center", fontsize=9,
                 color=PPI_COLORS["dark"])
     ax.set_ylabel("Annual revenue ($B)")
     ax.set_ylim(0, max(g.values) * 1.18)
@@ -414,6 +416,14 @@ def headlines(sweep, lines, bounds, bundles, cell_none, cell_central, lit, tract
 
     # --- tract-level heterogeneity behind that aggregate gap ---
     H.add("TractN", len(tracts), num)
+    # A-1: the paper must disclose the exclusion, so the denominator is a macro too.
+    # Both dropped tracts are zero-population special-use tracts with no land tax on
+    # either surface (0/0), read straight from the OPA export's row count.
+    _o = pd.read_csv(DATA / "philadelphia_lvt_ubi_ty2026.csv", dtype={"tract_geoid": str})
+    H.add("TractTotal", len(_o), num)
+    H.add("TractDropped", len(_o) - len(tracts), num)
+    H.add("TractAboveClip", int((tracts.ratio > MAP_CLIP_HI).sum()), num)
+    H.add("TractBelowClip", int((tracts.ratio < MAP_CLIP_LO).sum()), num)
     H.add("TractMedianRatio", tracts.ratio.median(), ratio)
     H.add("TractPFive", tracts.ratio.quantile(0.05), ratio)
     H.add("TractPNinetyFive", tracts.ratio.quantile(0.95), ratio)
@@ -426,6 +436,10 @@ def headlines(sweep, lines, bounds, bundles, cell_none, cell_central, lit, tract
     H.add("CapitalB", by_class["capital"] / 1e9, usd_b)
     H.add("LandTaxB", by_class["absorbed"] / 1e9, usd_b)
     H.add("LedgerLines", len(lines), num)
+    # A-1: only the labor+capital lines are abolition candidates; the ledger's other
+    # rows are the absorbed land tax, the kept parking tax, and out-of-scope lines.
+    H.add("AbolishableLines", int(lines["classification"].isin(["labor", "capital"]).sum()), num)
+    H.add("BundleCount", len([b for b in BUNDLE_ORDER if b != "B0"]), num)
 
     # --- bundles (LaTeX macro names cannot contain digits, so B3 -> BThree) ---
     WORD = {"B1": "BOne", "B2": "BTwo", "B3": "BThree", "B4": "BFour", "B5": "BFive"}
@@ -443,6 +457,17 @@ def headlines(sweep, lines, bounds, bundles, cell_none, cell_central, lit, tract
         H.add(f"{w}LitLow", lit.loc[b, "lit_low"], share)
     H.add("BThreeWageSharePct", 100 * lit.loc["B3", "w_wage"], pct)
     H.add("BFiveWageSharePct", 100 * lit.loc["B5", "w_wage"], pct)
+
+    # A-3: the audit (ledger M-1) made this CI load-bearing -- a point estimate
+    # statistically indistinguishable from 1.0 must not be quoted bare. Parsed from the
+    # bound's own note field so it cannot drift from the source record.
+    import re as _re
+    _cn = str(bounds[(bounds.family == "building")
+                     & (bounds.edge == "high")].iloc[0]["note"])
+    _m = _re.search(r"95% CI ([\d.]+)-([\d.]+)%", _cn)
+    if _m:
+        H.add("CosteCiLow", float(_m.group(1)), pct)
+        H.add("CosteCiHigh", float(_m.group(2)), pct)
 
     # --- the published bounds themselves ---
     for f in FAMILIES:

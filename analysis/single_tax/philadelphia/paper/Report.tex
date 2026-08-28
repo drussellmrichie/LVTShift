@@ -90,8 +90,10 @@ not. The point of the exercise is to make the disagreement precise.
 \section{Data and methods}
 
 \paragraph{The ledger.} We assemble every City and School District tax that the program would
-abolish, from the City's Quarterly City Manager's Report and School District sources, at
-\StxLedgerLines{} lines with a source and a vintage attached to each
+abolish, from the City's Quarterly City Manager's Report and School District sources ---
+\StxAbolishableLines{} abolishable taxes, carried in a \StxLedgerLines{}-line ledger that also
+records the absorbed land tax, the kept parking tax and the out-of-scope consumption taxes,
+with a source and a vintage attached to each line
 (Table~\ref{tab:ledger}). Two lines --- the School Income Tax and the Business Use \&
 Occupancy Tax --- are secondary-source estimates rather than verified figures, and are flagged
 as such wherever they appear. Figure~\ref{fig:ledger} shows the totals.
@@ -117,10 +119,12 @@ recovers its excess burden as well as its revenue, but demanding.
 
 \paragraph{What is swept, not estimated.} $\kappa$ is a swept parameter throughout. We never
 estimate it and then report a single answer; we report the threshold and let the reader supply
-their own belief. We sweep \StxSweepRows{} combinations of land surface, rent basis, discount
-rate, capture share, road-rent scenario, and haircut. Numbers quoted without qualification are
-the central cell: a \StxDiscountRate{} discount rate, full capture ($\varphi = 1$), no haircut,
-and no road rent.
+their own belief. We sweep \StxSweepRows{} rows: \StxBundleCount{} reform bundles across every
+combination of land surface, rent basis, discount rate, capture share, road-rent scenario and
+haircut. Numbers quoted without qualification are the central cell --- a \StxDiscountRate{}
+discount rate, full capture ($\varphi = 1$), no haircut, no road rent, and the taxable rent
+basis, which counts only land that is taxable today rather than reaching currently exempt
+land.
 
 One structural feature is worth flagging because it looks like a coincidence in the results:
 $\kappa^*$ depends on $\varphi$ and $h$ only through their product $\varphi(1-h)$, so a
@@ -133,14 +137,25 @@ Assessment's own land values, and an independent surface produced by the Land Yi
 Dataset (LYCD). They do not agree. We carry both through every calculation rather than
 choosing between them.
 
+Three properties of that comparison are worth stating, because they bound what the map in the
+next section can show. It compares \emph{taxable} land only, so in institution-heavy tracts it
+speaks for the taxable slice rather than all land. The independent surface is not wholly
+independent by construction: about a tenth of its parcel values are imputed from neighbouring
+parcels, and it caps a further set at the assessor's own total market value. And the two runs
+differ in nothing but the land surface --- same parcels, same vintage, same capture rate, same
+census join --- which is what licenses reading their ratio as valuation disagreement rather
+than as any other difference between the models.
+
 \paragraph{Bounding $\kappa$ from published evidence.} To ask whether the required $\kappa^*$
 is plausible, we bracket each tax family with published capitalization and incidence
 estimates (Table~\ref{tab:bounds}). The bounds are deliberately wide, because the literature
 is. For the tax on structures the two best-identified studies disagree outright: German
 municipal property-tax reforms show near-full pass-through to tenants with landowners bearing
 almost nothing, while Philadelphia's own 10-year construction abatement % noqa: hardcode -- statutory term, not a result
-shows capitalization of
-\StxKappaBuildingHigh{} of its value into new-construction prices. For the wage tax the upper bound
+is capitalized at \StxCosteCiLow{}--\StxCosteCiHigh{} of its value (95\% confidence interval; % noqa: hardcode -- confidence level, a convention not a result
+point estimate just above parity) into new-construction prices --- measured on the whole home
+price, and attributed to the site on the argument that structures are supplied at
+construction cost. For the wage tax the upper bound
 comes from a general-equilibrium counterfactual of \emph{this tax in this city}, and it should
 be read as a ceiling rather than a central estimate: it assumes an open city in which all
 incidence necessarily falls on landowners. The lower bound for that family is transferred from
@@ -154,7 +169,9 @@ local wage tax.
 Philadelphia's taxable land generates \StxRentOpa{} a year in site rent on the assessor's
 values and \StxRentLycd{} on the LYCD surface --- a difference of \StxSurfaceGapPct{}. That
 aggregate gap understates the problem, because the disagreement is not a uniform scaling
-factor. Across \StxTractN{} census tracts the median ratio of LYCD to OPA land value is
+factor. Across the \StxTractN{} of \StxTractTotal{} census tracts where both surfaces carry
+land value --- the \StxTractDropped{} excluded are zero-population special-use tracts with no
+land value on either --- the median ratio of LYCD to OPA land value is
 \StxTractMedianRatio{}, but the 5th percentile is \StxTractPFive{} and the 95th is
 \StxTractPNinetyFive{}. In \StxTractShareLycdHigher{} of tracts LYCD assigns more land value;
 in the remaining \StxTractShareOpaHigher{} the assessor does.
@@ -177,23 +194,25 @@ is right; it falls on \emph{different neighborhoods}.
   \includegraphics[width=0.82\linewidth]{surface_map.pdf}
   \caption{Ratio of LYCD to OPA land value by census tract, at full land-rent capture. Values
   above 1 (orange) mean the independent surface assigns more land value than the assessor;
-  below 1 (purple) means the assessor assigns more. The scale is clipped at \StxMapClipLo{} and \StxMapClipHi{}; a
-  small number of tracts with near-zero assessed land run far higher.}
+  below 1 (purple) means the assessor assigns more. The scale is clipped at both ends, at
+  \StxMapClipLo{} and \StxMapClipHi{}: \StxTractAboveClip{} tracts sit above the upper clip
+  (a handful with near-zero assessed land run far higher) and \StxTractBelowClip{} below the
+  lower one, so the darkest shades understate the spread at both tails.}
   \label{fig:surfacemap}
 \end{figure}
 
 \begin{figure}[htbp]\centering
   \includegraphics[width=0.86\linewidth]{ledger.pdf}
-  \caption{What the program abolishes, absorbs, and leaves alone. The Parking Tax appears at
-  zero because it left the City General Fund after FY2023. Out-of-scope lines are City
-  consumption taxes the program does not touch.}
+  \caption{What the program abolishes, absorbs, and leaves alone, by ledger category. The
+  ``kept'' bar is zero because its only line, the Parking Tax, left the City General Fund
+  after FY2023. Out-of-scope lines are City consumption taxes the program does not touch.}
   \label{fig:ledger}
 \end{figure}
 
 \begin{table}[htbp]\centering
   \caption{The revenue ledger: taxes abolished and absorbed. Every line carries a source and
-  vintage in the exported ledger; the School Income and Use \& Occupancy lines are
-  secondary-source estimates.}
+  vintage in the exported ledger-lines file; the School Income and Use \& Occupancy lines are
+  secondary-source estimates, flagged here and wherever the bundles containing them appear.}
   \label{tab:ledger}
   \small
   \input{tables/ledger.tex}
@@ -201,8 +220,9 @@ is right; it falls on \emph{different neighborhoods}.
 
 \subsection{What each reform bundle requires}
 
-Table~\ref{tab:bundles} and Figure~\ref{fig:kappastar} give the break-even thresholds. Two
-bundles clear on the arithmetic alone. Abolishing the tax on structures alone requires
+Table~\ref{tab:bundles} and Figure~\ref{fig:kappastar} give the break-even thresholds. The
+two smallest bundles clear on the arithmetic alone --- one on both land surfaces, one on only
+the independent surface. Abolishing the tax on structures alone requires
 $\kappa^*$ of \StxBOneKappaOpa{} on the assessor's land and \StxBOneKappaLycd{} on LYCD ---
 both negative, meaning the land base already supports it with no capitalization whatsoever.
 Abolishing the Wage \& Earnings Tax alone requires \StxBTwoKappaOpa{} on OPA land and
@@ -226,8 +246,11 @@ Tax --- requires \StxBFiveKappaOpa{} and \StxBFiveKappaLycd{} respectively.
 \end{table}
 
 \begin{table}[htbp]\centering
-  \caption{Published bounds on $\kappa$ by tax family. $\dagger$ marks a bound transferred
-  from a study of a different tax; all others come from studies of the same instrument.}
+  \caption{Published bounds on $\kappa$ by tax family. $\dagger$ marks the one bound the
+  source record flags as transferred from a different tax. The others are studies of the same
+  \emph{kind} of tax, which is not always the same instrument: the third family's bounds come
+  from work on state corporate taxes and are applied here to a school income tax, a use tax
+  and a transfer tax.}
   \label{tab:bounds}
   \small
   \input{tables/bounds.tex}
@@ -288,9 +311,10 @@ surfaces.
 
 \begin{figure}[htbp]\centering
   \includegraphics[width=\linewidth]{sensitivity.pdf}
-  \caption{One-at-a-time sensitivity of $\kappa^*$ for the wage-plus-structures bundle. Bars
-  span the range each assumption produces with the others held at the central cell. Capture
-  and haircut share a row because $\kappa^*$ depends only on their product.}
+  \caption{One-at-a-time sensitivity of $\kappa^*$ for the wage-plus-structures bundle. Each
+  bar spans the range that input produces with the others held at the central cell. Capture
+  and haircut share a row and are swept jointly, because $\kappa^*$ depends on them only
+  through the product $arphi(1-h)$; sweeping either alone would show half the range.}
   \label{fig:sensitivity}
 \end{figure}
 
@@ -317,17 +341,23 @@ supports accurate billing.
 
 \section{Caveats}
 
-\paragraph{This is a static ledger.} No behavioral response is modeled anywhere. Migration,
-agglomeration, changes in the built stock, and labor-supply effects are all absent. This is
-the point of the design --- $\kappa$ is precisely the channel through which those responses
-would arrive, and it is swept rather than assumed --- but it means the report cannot say what
-\emph{would} happen, only what would have to be true.
+\paragraph{This is a static ledger, with one exception.} No behavioral response to the tax
+reform is modeled: migration, agglomeration, changes in the built stock, and labor-supply
+effects are all absent. This is the point of the design --- $\kappa$ is precisely the channel
+through which those responses would arrive, and it is swept rather than assumed --- but it
+means the report cannot say what \emph{would} happen, only what would have to be true. The
+exception is road rent: the cordon figure below embeds a full behavioral response to the toll
+(entry reduction, mode shift, a steady state years out), because a toll revenue with no
+behavioral response would not be a meaningful number. That asymmetry is deliberate and it runs
+one way --- the tax side is static, the road-rent term is not.
 
-\paragraph{The published bounds are for marginal changes.} Every estimate behind
-Table~\ref{tab:bounds} concerns a small change to a tax that continues to exist. This program
-abolishes several taxes at once, at full land-rent capture. Nothing in the literature speaks to
-whether a marginal capitalization rate survives at that scale, and the bounds should be read as
-bracketing the marginal case only.
+\paragraph{The published bounds are mostly for marginal changes.} Every \emph{empirical}
+estimate behind Table~\ref{tab:bounds} concerns a small change to a tax that continues to
+exist, while this program abolishes several taxes at once at full land-rent capture. Nothing in
+that evidence speaks to whether a marginal capitalization rate survives at that scale, and
+those bounds should be read as bracketing the marginal case only. The one exception is the wage
+family's upper bound, which is itself a full-abolition counterfactual for this tax in this city
+--- the right scale, but a modeled one rather than an observation.
 
 \paragraph{The wage family is the weakest link.} It is also the largest, at
 \StxBThreeWageSharePct{} of the third bundle and \StxBFiveWageSharePct{} of the full program.
@@ -339,11 +369,16 @@ commuter base. Nothing published estimates the interior of that range.
 dollar of assessed site rent. Where assessment is wrong, full capture collects the error too;
 the haircut sweep is a crude stand-in for that and for outright abandonment, not a model of it.
 
-\paragraph{Road and curb rents are conservative.} The central road-rent figure of
-\StxGCentralM{} a year comes from an external cordon-pricing model and is carried as a modeled
-input, never a verified one. Curb revenue is deliberately excluded: Philadelphia already
-directs its on-street parking revenue to the City and the School District, so counting it again
-would let one dollar fund both today's spending and the reform.
+\paragraph{Road and curb rents are small, and the curb omission's direction is unknown.} The
+central road-rent figure of \StxGCentralM{} a year comes from an external cordon-pricing model
+and is carried as a modeled input, never a verified one; it moves $\kappa^*$ less than any
+other input we sweep. Curb revenue is deliberately excluded, because Philadelphia already
+directs its on-street parking revenue to the City and the School District, and counting it
+again would let one dollar fund both today's spending and the reform. We do not claim that
+exclusion is conservative: pricing the cordon would itself suppress downtown trips and so
+reduce the very parking revenue the exclusion holds at today's level, and the only published
+efficient-pricing scenarios return less than the status quo. The net sign is unresolved and
+the magnitude is small either way.
 
 \section{What follows}
 
@@ -368,8 +403,9 @@ Getting that measurement right is not a technical preliminary to the debate abou
 taxation. On the evidence here, it \emph{is} the debate.
 
 \paragraph{Reproducibility.} Every number, table, and figure in this report is generated by
-\texttt{paper/scripts/generate\_paper\_assets.py} from the analysis outputs; rebuild with a
-single command. The underlying model, its specification, the evidence base behind the $\kappa$
-bounds, and two independent audits of both are in the project repository.
+\texttt{paper/scripts/generate\_paper\_assets.py} from the analysis outputs; rebuild with two commands (regenerate, then compile). The underlying model, its specification and the
+evidence base behind the $\kappa$ bounds are in the project repository, along with three dated
+audits: a self-check and an independent adversarial pass over the ledger, and an independent
+pre-publication audit of this report, whose findings are applied here.
 
 \end{document}
