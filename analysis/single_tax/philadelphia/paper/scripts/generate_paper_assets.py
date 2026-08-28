@@ -141,6 +141,48 @@ def surface_ratio_by_tract():
 # --------------------------------------------------------------------------- #
 # Figures
 # --------------------------------------------------------------------------- #
+CITY_HALL_LONLAT = (-75.1635, 39.9526)   # geographic constant, cited by macros
+
+
+def geography_stats(tracts):
+    """The computed statistics behind the map's narration — added after the paper
+    audit's M-1 refuted a narration written from the rendered image. Every geographic
+    sentence in section 3.1 must cite these macros, not the picture."""
+    import geopandas as gpd
+    from shapely.geometry import Point
+    geo = gpd.read_parquet(CITY_DATA / "census_tracts.gpq")
+    geo["tract_geoid"] = geo["GEOID"].astype(str)
+    g = geo.merge(tracts, on="tract_geoid", how="inner").to_crs(32618)
+    hall = gpd.GeoSeries([Point(*CITY_HALL_LONLAT)], crs=4326).to_crs(32618).iloc[0]
+    g["km"] = g.geometry.centroid.distance(hall) / 1000.0
+    g["q"] = pd.qcut(g["km"], 5, labels=False)
+
+    out = {
+        "mid_belt_median": g[g["q"].isin([1, 2])]["ratio"].median(),
+        "outer_median": g[g["q"] == 4]["ratio"].median(),
+        "below_one_median_km": g[g["ratio"] < 1]["km"].median(),
+        "all_median_km": g["km"].median(),
+    }
+    # Incidence geography: share of tracts whose burden-rank moves materially.
+    ro = g["new_land_tax_opa"].rank(pct=True)
+    rl = g["new_land_tax_lycd"].rank(pct=True)
+    out["rank_shift_share"] = 100 * ((ro - rl).abs() > 0.10).mean()
+    return out
+
+
+def band_fragility(sweep, bundles, lit):
+    """Across every swept operating point (taxable basis), how often does some
+    bundle/surface cell exit the published band on the failure side? Feeds the M-4
+    disclosure sentence in section 3.3."""
+    d = sweep[(sweep.rent_basis == BASIS_STAR) & (sweep.bundle != "B0")].copy()
+    d["hi"] = d["bundle"].map(lit["lit_high"])
+    grp = d.groupby(["discount_rate", "phi", "haircut", "g_level"])
+    total = grp.ngroups
+    any_above = grp.apply(lambda x: bool((x["kappa_star"] > x["hi"]).any()),
+                          include_groups=False).sum()
+    return total, int(any_above)
+
+
 def fig_surface_map(tracts):
     """THE headline figure: where the two published land surfaces disagree."""
     try:
@@ -245,11 +287,20 @@ def fig_sensitivity(sweep):
                  for v in ("opa", "lycd")]
     rows.append({"dim": "Land surface\n(OPA vs LYCD)", "surface": None,
                  "lo": min(surf_vals), "hi": max(surf_vals)})
+    def span_product(surf):
+        """kappa* over the full phi*(1-h) grid — the single knob, honestly measured.
+        The paper-audit's M-3: varying phi with h pinned (or vice versa) spans half of
+        what the knob spans. kappa*(x) = (T-G)/(x*T_ab) - R0/T_ab, so this span is even
+        R0-independent — identical across surfaces."""
+        sel = b3[(b3.surface == surf) & (b3.discount_rate == I_STAR)
+                 & (b3.g_level == "none")]
+        return sel["kappa_star"].min(), sel["kappa_star"].max()
+
     for col, lab in (("discount_rate", "Discount rate $i$\n(3–7%, chosen range)"),
-                     ("phi", "Capture $\\varphi$, or\nequivalently haircut $h$"),
+                     ("phi", "Capture $\\varphi$ and haircut $h$\n(one knob: $\\varphi(1-h)$)"),
                      ("g_level", "Road rent $G$")):
         for surf in ("opa", "lycd"):
-            lo, hi = span(col, surf)
+            lo, hi = span_product(surf) if col == "phi" else span(col, surf)
             rows.append({"dim": lab, "surface": surf, "lo": lo, "hi": hi})
     r = pd.DataFrame(rows)
 
@@ -401,6 +452,18 @@ def headlines(sweep, lines, bounds, bundles, cell_none, cell_central, lit, tract
         H.add(f"Kappa{f.capitalize()}High", hi["kappa"], share)
 
     # --- the sweep's own size, and the headline operating point ---
+    # Geography (M-1) and band-fragility (M-4) macros.
+    gs = geography_stats(tracts)
+    H.add("MidBeltMedianRatio", gs["mid_belt_median"], ratio)
+    H.add("OuterMedianRatio", gs["outer_median"], ratio)
+    H.add("BelowOneMedianKm", gs["below_one_median_km"], lambda x: f"{x:,.1f}")
+    H.add("AllMedianKm", gs["all_median_km"], lambda x: f"{x:,.1f}")
+    H.add("RankShiftSharePct", gs["rank_shift_share"], pct)
+    opt, above = band_fragility(sweep, bundles, lit)
+    H.add("OpPointsTotal", opt, num)
+    H.add("OpPointsAnyAbove", above, num)
+    vacant_study_macros(H)
+
     H.add("SweepRows", len(sweep), num)
     H.add("DiscountRate", 100 * I_STAR, pct)
     H.add("GCentralM", cell_central["g_amount"].iloc[0] / 1e6, usd_m)
@@ -452,12 +515,31 @@ def headlines(sweep, lines, bounds, bundles, cell_none, cell_central, lit, tract
     H.add("SpanSurface", surf_span, share)
     H.add("SpanDiscountOpa", _span("discount_rate", "opa"), share)
     H.add("SpanDiscountLycd", _span("discount_rate", "lycd"), share)
-    H.add("SpanCapture", _span("phi", "opa"), share)
+    # M-3 fix: SpanCapture is the PRODUCT-knob span phi*(1-h) over its swept grid,
+    # not the phi-only span with h pinned (which is half of it).
+    _pk = sweep[(sweep.bundle == "B3") & (sweep.rent_basis == BASIS_STAR)
+                & (sweep.surface == "opa") & (sweep.discount_rate == I_STAR)
+                & (sweep.g_level == "none")]["kappa_star"]
+    H.add("SpanCapture", _pk.max() - _pk.min(), share)
     H.add("SpanRoadRent", _span("g_level", "opa"), share)
 
     H.write()
     H.to_json(PAPER / "values.json")
     return H
+
+
+def vacant_study_macros(H):
+    """Read the vacant-land ratio study's generated table (produced by
+    scripts/vacant_land_ratio_study.py --out ...). The paper cites the study's
+    aggregates rather than restating docs/VACANT_LAND_VALUATION.md by hand."""
+    path = DATA / "philadelphia_vacant_land_ratio_study.csv"
+    v = pd.read_csv(path)
+    row = v[v["sample"].str.startswith("bare land, sale")].iloc[0]
+    H.add("VacantN", int(row["n"]), num)
+    H.add("VacantOpaAgg", row["OPA aggregate"], ratio)
+    H.add("VacantLycdAgg", row["LYCD aggregate"], ratio)
+    H.add("VacantOpaCod", int(row["OPA COD"]), num)
+    H.add("VacantLycdCod", int(row["LYCD COD"]), num)
 
 
 def main():

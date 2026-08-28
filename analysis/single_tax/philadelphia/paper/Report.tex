@@ -46,15 +46,20 @@ from taxes on capital. Could a tax on land rent replace them? This report answer
 and more answerable question: how much of each abolished tax would have to reappear as land
 rent --- a quantity we write $\kappa$ --- for full land-rent capture to fund the abolition
 while holding the City and School District whole. Abolishing the Wage \& Earnings Tax and the
-entire tax on structures requires $\kappa$ of \StxBThreeKappaOpa{} on the City assessor's land
-values, but only \StxBThreeKappaLycd{} on the alternative published land surface. That spread
-is the finding. The two surfaces value Philadelphia's land \StxSurfaceGapPct{} apart in
-aggregate, they disagree unevenly across the city, and holding every other assumption fixed
-they move the break-even threshold more than any other input. For the three largest reform
-bundles the break-even threshold falls \emph{inside} the range that published capitalization
-estimates support --- meaning the empirical literature, as it stands, is consistent with the
-reform both succeeding and failing. Philadelphia cannot price this reform more precisely than
-it can assess its land.
+entire tax on structures breaks even at $\kappa$ of \StxBThreeKappaOpa{} on the City
+assessor's land values, but \StxBThreeKappaLycd{} on the alternative published land surface.
+That spread is the finding --- not because the surface moves the answer more than every other
+input (the swept discount rate moves it more), but because it is the one input that is not the
+analyst's to choose: a disagreement between two published assessments of the same parcels,
+\StxSurfaceGapPct{} apart in aggregate and uneven across the city. For the largest reform
+bundles the break-even threshold falls inside the range that published capitalization evidence
+brackets, so the literature is consistent with the reform both succeeding and failing ---
+though for the full program on the assessor's surface, the succeeding half of that range rests
+on a modeled open-city ceiling. And a companion sales study shows the disagreement is not
+beyond evidence: on vacant land --- the majority of the gap, and the one class where a sale
+price reveals the land value directly --- \emph{both} surfaces fail, in opposite directions.
+Philadelphia cannot price this reform more precisely than it can assess its land, and its own
+sales records already measure how far short that falls.
 \end{abstract}
 
 \section{The question}
@@ -154,13 +159,19 @@ factor. Across \StxTractN{} census tracts the median ratio of LYCD to OPA land v
 \StxTractPNinetyFive{}. In \StxTractShareLycdHigher{} of tracts LYCD assigns more land value;
 in the remaining \StxTractShareOpaHigher{} the assessor does.
 
-Figure~\ref{fig:surfacemap} shows where. The disagreement has a clear geography: the two
-surfaces are closest through the row-house neighborhoods, and diverge at the edges --- LYCD
-assigns substantially more land value across the Far Northeast, the industrial river wards,
-and the airport periphery, while the assessor assigns relatively more in and around Center
-City. A reform whose burden depends on the land surface therefore does not merely become
-larger or smaller depending on which one is right; it falls on \emph{different
-neighborhoods}.
+Figure~\ref{fig:surfacemap} shows where. The disagreement is pervasive rather than patterned
+by distance from the core: LYCD assigns more land value in \StxTractShareLycdHigher{} of
+tracts, and there is no simple core-to-edge gradient. The divergence is largest through the
+mid-city row-house belts (median \StxMidBeltMedianRatio{}) and along the industrial
+riverfront, and smallest in the city's outermost tracts (median \StxOuterMedianRatio{}). The
+minority of tracts where the assessor assigns more do cluster centrally --- their median
+distance from City Hall is \StxBelowOneMedianKm{}~km, against \StxAllMedianKm{}~km for the
+city as a whole --- though even the typical Center City tract carries more LYCD than OPA land
+value. What matters for policy is that the surfaces disagree about \emph{which} land holds
+the value, not only about how much: \StxRankShiftSharePct{} of tracts move more than ten
+percentile ranks in their share of the levy between the two surfaces. A reform whose burden
+depends on the land surface does not merely become larger or smaller depending on which one
+is right; it falls on \emph{different neighborhoods}.
 
 \begin{figure}[htbp]\centering
   \includegraphics[width=0.82\linewidth]{surface_map.pdf}
@@ -237,6 +248,16 @@ substantially short. The band is wide because the evidence is genuinely conteste
 we declined to look. The single widest contributor is the tax on structures, where the two
 best-identified studies disagree from one end of the range to the other.
 
+Two qualifications keep this from being read as more settled than it is. The counts above are
+stated at the central cell and are not invariant to it: across the \StxOpPointsTotal{}
+operating points the sweep covers, \StxOpPointsAnyAbove{} put at least one bundle \emph{above}
+the band --- the failure side --- under less favorable combinations of discount rate, capture,
+and haircut. And for the two largest bundles on the assessor's surface, the
+``consistent-with-succeeding'' half of the verdict rests on the wage family's upper bound,
+which is a modeled open-city ceiling rather than an estimate
+(Table~\ref{tab:bounds}); the wage-plus-structures bundle is the one whose inside-the-band
+standing survives on point estimates alone.
+
 \begin{figure}[htbp]\centering
   \includegraphics[width=\linewidth]{kappa_star.pdf}
   \caption{Break-even capitalization $\kappa^*$ by bundle and land surface, against the
@@ -248,19 +269,22 @@ best-identified studies disagree from one end of the range to the other.
 
 \subsection{What moves the answer}
 
-Figure~\ref{fig:sensitivity} varies each assumption in turn for the third bundle. The land
-surface moves $\kappa^*$ by \StxSpanSurface{}. Capture and the haircut together --- the same
-knob, as noted above --- move it by \StxSpanCapture{}, and road-rent revenue by
-\StxSpanRoadRent{}, the smallest effect of any input we sweep.
+Figure~\ref{fig:sensitivity} varies each input in turn for the third bundle. Ranked by the
+range each produces: the discount rate moves $\kappa^*$ by \StxSpanDiscountOpa{} on the
+assessor's surface (\StxSpanDiscountLycd{} on LYCD) across its swept range; the
+capture-and-haircut knob --- one knob, since $\kappa^*$ depends only on the product
+$\varphi(1-h)$ --- moves it by \StxSpanCapture{} across its grid; the land surface moves it by
+\StxSpanSurface{}; road rent by \StxSpanRoadRent{}. The land surface is not the largest of
+these, and this report should not be read as claiming it is.
 
-The discount rate moves it more: \StxSpanDiscountOpa{} on the assessor's surface and
-\StxSpanDiscountLycd{} on LYCD, across a swept range of \StxDiscountLowPct{} to \StxDiscountHighPct{}. But that comparison is not
-quite like for like, and the difference matters for what a reader should do about it. The
-discount-rate range is an analyst's choice --- we chose to sweep it widely --- and narrowing it
-is a matter of argument about capitalization rates. The gap between the two land surfaces is
-not a choice. It is a disagreement between two published assessments of the same parcels, and
-no amount of care in specifying the model will close it. Holding the discount rate fixed at
-any value, the land surface is the largest single source of variation in the answer.
+What sets the land surface apart is not its size but its kind. The discount-rate and
+capture ranges are the analyst's to choose: sweep them narrower --- over the
+\StxDiscountLowPct{}--\StxDiscountHighPct{} range we chose, or a tighter one --- and their
+spans shrink by construction. The land-surface gap is not a choice. It is a disagreement
+between two published assessments of the same parcels, and the only way to shrink it is to
+find out which assessment is wrong. The next section shows that, for the largest single
+component of the gap, the city's own sales records answer that question --- against both
+surfaces.
 
 \begin{figure}[htbp]\centering
   \includegraphics[width=\linewidth]{sensitivity.pdf}
@@ -269,6 +293,27 @@ any value, the land surface is the largest single source of variation in the ans
   and haircut share a row because $\kappa^*$ depends only on their product.}
   \label{fig:sensitivity}
 \end{figure}
+
+\subsection{Where the truth is observable, both surfaces fail}
+
+The surface disagreement is not beyond evidence. For a bare lot, the sale price \emph{is} the
+land price --- the thing that makes land valuation hard everywhere else, separating land from
+structure, does not apply. A companion study in this project
+(\texttt{docs/VACANT\_LAND\_VALUATION.md}, reproducible from the city's recorded sales) runs
+that test on \StxVacantN{} bare-land sales. In aggregate, the assessor carries vacant land at
+\StxVacantOpaAgg{} its sale value; LYCD carries it at \StxVacantLycdAgg{}. The study
+attributes the majority of the citywide surface gap to this one property class, and finds that
+correcting it alone would cut the two surfaces' aggregate disagreement roughly in half ---
+the surfaces bracket the truth from opposite sides, and two independent corrections converge.
+
+Nor does either surface merely mis-level vacant land; both scatter it. On the same sales, the
+coefficient of dispersion is \StxVacantOpaCod{} for the assessor and \StxVacantLycdCod{} for
+LYCD, against a professional (IAAO) standard of 20 % noqa: hardcode -- fixed professional standard, not a result
+--- cheap lots over-assessed severalfold, expensive lots under-assessed by half. For this
+report that cuts two ways. It means the headline disagreement is largely a measurable,
+correctable assessment failure rather than an irreducible unknown. And it means that on the
+property class a land tax most needs to reach, \emph{neither} published surface currently
+supports accurate billing.
 
 \section{Caveats}
 
@@ -303,16 +348,19 @@ would let one dollar fund both today's spending and the reform.
 \section{What follows}
 
 The result that should change a reader's mind is not any single $\kappa^*$. It is that the
-answer swings by \StxSpanSurface{} depending on which published land surface you believe, and
-that nothing in the analysis can adjudicate between them.
+answer swings by \StxSpanSurface{} depending on which published land surface you believe ---
+and that where the disagreement can be tested against sales, both surfaces fail. The ledger
+cannot adjudicate between them; the city's own recorded sales, on the one property class where
+land value is directly observable, partially can, and they convict both.
 
-That is an unusual finding to arrive at from a tax-policy exercise, and it points somewhere
-specific. Philadelphia is being asked to consider a reform whose entire logic runs through the
-value of its land, and the city does not have a settled measurement of what its land is worth.
-The two available answers differ by \StxSurfaceGapPct{} in aggregate and disagree about which
-neighborhoods hold the value. Before the city can price a land-value tax, it has to be able to
-assess land --- and the evidence here says it currently cannot do so to a tolerance the policy
-question requires.
+Philadelphia is being asked to consider a reform whose entire logic runs through the value of
+its land, and the city does not have a settled measurement of what its land is worth. The two
+published answers differ by \StxSurfaceGapPct{} in aggregate, disagree about which
+neighborhoods hold the value, and --- where they can be checked --- are wrong in opposite
+directions, at dispersion several times the professional standard. Before the city can price a
+land-value tax, it has to be able to assess land. Unlike the capitalization question, that
+failure is already measured, already localized to a property class, and addressable with
+records the city already collects.
 
 That is a smaller ask than a single tax, and a more urgent one. It is also a prerequisite: any
 version of this reform, at any ambition, inherits whichever land surface the assessor produces.
