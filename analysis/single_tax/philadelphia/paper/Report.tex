@@ -1,0 +1,411 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}      % proper glyphs (<, >, |) and hyphenation
+\usepackage{lmodern}
+\usepackage{amsmath}           % \text{} in display math (not in the scaffolder preamble)
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}\graphicspath{{figures/}}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{xurl}              % break long URLs at safe characters
+\usepackage[htt]{hyphenat}    % allow breaks inside \texttt{} (file paths)
+% Float budget: with seven floats in a short document the defaults strand them all
+% after the conclusion. These let more of the page be float and fewer be forced text.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.7}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.75}
+\sloppy                        % prefer loose spacing over right-margin overflow
+\emergencystretch=3em          % last-resort stretch for unbreakable lines
+\input{ppi-theme.tex}
+
+% Generated headline numbers — produced by paper/scripts/generate_paper_assets.py.
+% Run that generator BEFORE writing/compiling prose; never type result numbers here.
+\InputIfFileExists{tables/headlines.tex}{}{}
+
+\begin{document}
+
+\begin{center}
+  \IfFileExists{figures/ppi-logo.pdf}{\includegraphics[height=1.3cm]{ppi-logo}\\[0.6em]}{\IfFileExists{figures/ppi-logo.png}{\includegraphics[height=1.3cm]{ppi-logo}\\[0.6em]}{}}{\LARGE\bfseries\color{ppiprimary} What Philadelphia's Land Rent Could Replace\par}
+  \vspace{0.35em}
+  {\large\color{ppidark} And why the answer depends on an assessment question nobody has settled\par}
+  \vspace{0.7em}
+  {\large Russell Richie\par}
+  \vspace{0.2em}
+  {\normalsize Progress and Poverty Institute\par}
+  \vspace{0.2em}
+  {\normalsize \today\par}
+\end{center}
+\vspace{1em}
+
+\begin{abstract}
+\noindent Philadelphia collects \StxLaborB{} a year from taxes on labor and \StxCapitalB{}
+from taxes on capital. Could a tax on land rent replace them? This report answers a narrower
+and more answerable question: how much of each abolished tax would have to reappear as land
+rent --- a quantity we write $\kappa$ --- for full land-rent capture to fund the abolition
+while holding the City and School District whole. Abolishing the Wage \& Earnings Tax and the
+entire tax on structures breaks even at $\kappa$ of \StxBThreeKappaOpa{} on the City
+assessor's land values, but \StxBThreeKappaLycd{} on the alternative published land surface.
+That spread is the finding --- not because the surface moves the answer more than every other
+input (the swept discount rate moves it more), but because it is the one input that is not the
+analyst's to choose: a disagreement between two published assessments of the same parcels,
+\StxSurfaceGapPct{} apart in aggregate and uneven across the city. For the largest reform
+bundles the break-even threshold falls inside the range that published capitalization evidence
+brackets, so the literature is consistent with the reform both succeeding and failing ---
+though for the full program on the assessor's surface, the succeeding half of that range rests
+on a modeled open-city ceiling. And a companion sales study shows the disagreement is not
+beyond evidence: on vacant land --- the majority of the gap, and the one class where a sale
+price reveals the land value directly --- \emph{both} surfaces fail, in opposite directions.
+Philadelphia cannot price this reform more precisely than it can assess its land, and its own
+sales records already measure how far short that falls.
+\end{abstract}
+
+\section{The question}
+
+Proposals to shift Philadelphia's tax burden onto land value are usually argued at the level
+of principle: land is fixed in supply, so taxing it does not discourage the thing being taxed.
+The harder question is arithmetic. Philadelphia raises roughly \StxLaborB{} a year from the
+Wage \& Earnings Tax and its relatives, and \StxCapitalB{} from taxes that fall on capital ---
+the tax on structures, the Business Income \& Receipts Tax, the Realty Transfer Tax, and
+others. A land tax that replaced them would have to raise the same money out of a base that,
+today, generates \StxLandTaxB{} a year in land-portion property tax.
+
+The gap looks impossible until you notice what abolition does to land rent. A tax on wages
+makes a city a worse place to live and work; abolishing it makes the city more attractive, and
+in a city with a fixed supply of land, part of that gain is bid into land rents. The same
+holds for a tax on buildings. This is the mechanism behind the century-old claim, sometimes
+called ATCOR --- All Taxes Come Out Of Rents --- that the land base grows as other taxes are
+removed.
+
+Whether it grows \emph{enough} is an empirical question, and this report does not pretend to
+settle it. Instead it does something more useful for a decision-maker: it computes, exactly,
+how much of that effect the reform would need. We call that break-even share $\kappa^*$. If
+$\kappa^*$ is 0.5, then half of every dollar of abolished tax would have to reappear as land % noqa: hardcode -- illustrative threshold, not a result
+rent for the program to fund itself. A reader who believes capitalization is stronger than
+that should support the reform on these numbers; a reader who believes it is weaker should
+not. The point of the exercise is to make the disagreement precise.
+
+\section{Data and methods}
+
+\paragraph{The ledger.} We assemble every City and School District tax that the program would
+abolish, from the City's Quarterly City Manager's Report and School District sources ---
+\StxAbolishableLines{} abolishable taxes, carried in a \StxLedgerLines{}-line ledger that also
+records the absorbed land tax, the kept parking tax and the out-of-scope consumption taxes,
+with a source and a vintage attached to each line
+(Table~\ref{tab:ledger}). Two lines --- the School Income Tax and the Business Use \&
+Occupancy Tax --- are secondary-source estimates rather than verified figures, and are flagged
+as such wherever they appear. Figure~\ref{fig:ledger} shows the totals.
+
+The land-portion property tax is treated differently from the rest. It is \emph{absorbed},
+not abolished: the City and School District must still be made whole for the
+\StxLandTaxB{} a year they currently collect on land, so it enters the funding target for
+every bundle and is never counted as a tax the reform eliminates.
+
+\paragraph{The break-even calculation.} For a bundle $B$ of abolished taxes with annual
+receipts $T_j$, the reform must raise $\text{Target} = \sum_{j \in B} T_j + T_{\text{land}}$.
+The rent levy supplies $\varphi(1-h)\left(R_0 + \sum_j \kappa_j T_j\right) + G$, where $R_0$ is
+current annual site rent, $\varphi$ is the share of assessed rent actually captured, $h$ is a
+haircut for delinquency and abandonment, and $G$ is net-new revenue from pricing roads and
+curbs. Setting supply equal to target and solving for a uniform $\kappa$ gives
+\[
+  \kappa^*(B) \;=\; \frac{\text{Target} - G - \varphi(1-h)R_0}{\varphi(1-h)\sum_{j \in B} T_j}.
+\]
+$\kappa^*$ is exact, because $\kappa$ enters linearly. A value at or below zero means the
+bundle funds itself with no capitalization at all. A value above one means it would need more
+rent than the revenue foregone --- possible in principle, since abolishing a distortionary tax
+recovers its excess burden as well as its revenue, but demanding.
+
+\paragraph{What is swept, not estimated.} $\kappa$ is a swept parameter throughout. We never
+estimate it and then report a single answer; we report the threshold and let the reader supply
+their own belief. We sweep \StxSweepRows{} rows: \StxBundleCount{} reform bundles across every
+combination of land surface, rent basis, discount rate, capture share, road-rent scenario and
+haircut. Numbers quoted without qualification are the central cell --- a \StxDiscountRate{}
+discount rate, full capture ($\varphi = 1$), no haircut, no road rent, and the taxable rent
+basis, which counts only land that is taxable today rather than reaching currently exempt
+land.
+
+One structural feature is worth flagging because it looks like a coincidence in the results:
+$\kappa^*$ depends on $\varphi$ and $h$ only through their product $\varphi(1-h)$, so a
+capture share of \StxPhiLow{} and a \StxHaircutHighPct{} haircut are the same assumption expressed two ways.
+
+\paragraph{Two published land surfaces.} Computing $R_0$ requires knowing what Philadelphia's
+land is worth, and here the exercise runs into a problem that turns out to be the report's main
+finding. Two published parcel-level land surfaces exist for the city: the Office of Property
+Assessment's own land values, and an independent surface produced by the Land Yield Curve
+Dataset (LYCD). They do not agree. We carry both through every calculation rather than
+choosing between them.
+
+Three properties of that comparison are worth stating, because they bound what the map in the
+next section can show. It compares \emph{taxable} land only, so in institution-heavy tracts it
+speaks for the taxable slice rather than all land. The independent surface is not wholly
+independent by construction: about a tenth of its parcel values are imputed from neighbouring
+parcels, and it caps a further set at the assessor's own total market value. And the two runs
+differ in nothing but the land surface --- same parcels, same vintage, same capture rate, same
+census join --- which is what licenses reading their ratio as valuation disagreement rather
+than as any other difference between the models.
+
+\paragraph{Bounding $\kappa$ from published evidence.} To ask whether the required $\kappa^*$
+is plausible, we bracket each tax family with published capitalization and incidence
+estimates (Table~\ref{tab:bounds}). The bounds are deliberately wide, because the literature
+is. For the tax on structures the two best-identified studies disagree outright: German
+municipal property-tax reforms show near-full pass-through to tenants with landowners bearing
+almost nothing, while Philadelphia's own 10-year construction abatement % noqa: hardcode -- statutory term, not a result
+is capitalized at \StxCosteCiLow{}--\StxCosteCiHigh{} of its value (95\% confidence interval; % noqa: hardcode -- confidence level, a convention not a result
+point estimate just above parity) into new-construction prices --- measured on the whole home
+price, and attributed to the site on the argument that structures are supplied at
+construction cost. For the wage tax the upper bound
+comes from a general-equilibrium counterfactual of \emph{this tax in this city}, and it should
+be read as a ceiling rather than a central estimate: it assumes an open city in which all
+incidence necessarily falls on landowners. The lower bound for that family is transferred from
+a study of state corporate taxes, because no published work estimates the landowner share of a
+local wage tax.
+
+\section{Results}
+
+\subsection{The two land surfaces disagree, and not by a constant}
+
+Philadelphia's taxable land generates \StxRentOpa{} a year in site rent on the assessor's
+values and \StxRentLycd{} on the LYCD surface --- a difference of \StxSurfaceGapPct{}. That
+aggregate gap understates the problem, because the disagreement is not a uniform scaling
+factor. Across the \StxTractN{} of \StxTractTotal{} census tracts where both surfaces carry
+land value --- the \StxTractDropped{} excluded are zero-population special-use tracts with no
+land value on either --- the median ratio of LYCD to OPA land value is
+\StxTractMedianRatio{}, but the 5th percentile is \StxTractPFive{} and the 95th is
+\StxTractPNinetyFive{}. In \StxTractShareLycdHigher{} of tracts LYCD assigns more land value;
+in the remaining \StxTractShareOpaHigher{} the assessor does.
+
+Figure~\ref{fig:surfacemap} shows where. The disagreement is pervasive rather than patterned
+by distance from the core: LYCD assigns more land value in \StxTractShareLycdHigher{} of
+tracts, and there is no simple core-to-edge gradient. The divergence is largest through the
+mid-city row-house belts (median \StxMidBeltMedianRatio{}) and along the industrial
+riverfront, and smallest in the city's outermost tracts (median \StxOuterMedianRatio{}). The
+minority of tracts where the assessor assigns more do cluster centrally --- their median
+distance from City Hall is \StxBelowOneMedianKm{}~km, against \StxAllMedianKm{}~km for the
+city as a whole --- though even the typical Center City tract carries more LYCD than OPA land
+value. What matters for policy is that the surfaces disagree about \emph{which} land holds
+the value, not only about how much: \StxRankShiftSharePct{} of tracts move more than ten
+percentile ranks in their share of the levy between the two surfaces. A reform whose burden
+depends on the land surface does not merely become larger or smaller depending on which one
+is right; it falls on \emph{different neighborhoods}.
+
+\begin{figure}[htbp]\centering
+  \includegraphics[width=0.82\linewidth]{surface_map.pdf}
+  \caption{Ratio of LYCD to OPA land value by census tract, at full land-rent capture. Values
+  above 1 (orange) mean the independent surface assigns more land value than the assessor;
+  below 1 (purple) means the assessor assigns more. The scale is clipped at both ends, at
+  \StxMapClipLo{} and \StxMapClipHi{}: \StxTractAboveClip{} tracts sit above the upper clip
+  (a handful with near-zero assessed land run far higher) and \StxTractBelowClip{} below the
+  lower one, so the darkest shades understate the spread at both tails.}
+  \label{fig:surfacemap}
+\end{figure}
+
+\begin{figure}[htbp]\centering
+  \includegraphics[width=0.86\linewidth]{ledger.pdf}
+  \caption{What the program abolishes, absorbs, and leaves alone, by ledger category. The
+  ``kept'' bar is zero because its only line, the Parking Tax, left the City General Fund
+  after FY2023. Out-of-scope lines are City consumption taxes the program does not touch.}
+  \label{fig:ledger}
+\end{figure}
+
+\begin{table}[htbp]\centering
+  \caption{The revenue ledger: taxes abolished and absorbed. Every line carries a source and
+  vintage in the exported ledger-lines file; the School Income and Use \& Occupancy lines are
+  secondary-source estimates, flagged here and wherever the bundles containing them appear.}
+  \label{tab:ledger}
+  \small
+  \input{tables/ledger.tex}
+\end{table}
+
+\subsection{What each reform bundle requires}
+
+Table~\ref{tab:bundles} and Figure~\ref{fig:kappastar} give the break-even thresholds. The
+two smallest bundles clear on the arithmetic alone --- one on both land surfaces, one on only
+the independent surface. Abolishing the tax on structures alone requires
+$\kappa^*$ of \StxBOneKappaOpa{} on the assessor's land and \StxBOneKappaLycd{} on LYCD ---
+both negative, meaning the land base already supports it with no capitalization whatsoever.
+Abolishing the Wage \& Earnings Tax alone requires \StxBTwoKappaOpa{} on OPA land and
+\StxBTwoKappaLycd{} on LYCD, so on the independent surface that bundle, too, funds itself
+outright.
+
+The bundle that matters most is the third: abolish the Wage \& Earnings Tax \emph{and} the
+entire tax on structures, absorb the land tax, and fund all of it from site rent. That is a
+\StxBThreeTargetB{} annual target, and it requires $\kappa^*$ of \StxBThreeKappaOpa{} on the
+assessor's land surface against \StxBThreeKappaLycd{} on LYCD. The full program --- adding
+BIRT, the Net Profits Tax, the School Income Tax, Use \& Occupancy, and the Realty Transfer
+Tax --- requires \StxBFiveKappaOpa{} and \StxBFiveKappaLycd{} respectively.
+
+\begin{table}[htbp]\centering
+  \caption{Break-even capitalization by bundle, at a \StxDiscountRate{} discount rate, full
+  capture, no haircut and no road rent. ``Published high'' is the bundle-weighted upper end of
+  the ranges in Table~\ref{tab:bounds}.}
+  \label{tab:bundles}
+  \small
+  \input{tables/bundles.tex}
+\end{table}
+
+\begin{table}[htbp]\centering
+  \caption{Published bounds on $\kappa$ by tax family. $\dagger$ marks the one bound the
+  source record flags as transferred from a different tax. The others are studies of the same
+  \emph{kind} of tax, which is not always the same instrument: the third family's bounds come
+  from work on state corporate taxes and are applied here to a school income tax, a use tax
+  and a transfer tax.}
+  \label{tab:bounds}
+  \small
+  \input{tables/bounds.tex}
+\end{table}
+
+\subsection{The published evidence does not discriminate}
+
+Figure~\ref{fig:kappastar} plots those thresholds against the range that published
+capitalization estimates support. Of the \StxCellsTotal{} bundle-by-surface combinations,
+\StxCellsBelowBand{} fall below the published range --- they pencil more easily than even the
+least favorable published estimate would require --- and \StxCellsAboveBand{} fall above it.
+The remaining \StxCellsInsideBand{}, which include every one of the three largest bundles on
+both land surfaces, fall \emph{inside} it.
+
+That is the honest result, and it is a weak one: for the reforms that matter most, the
+empirical literature is consistent with the program funding itself and with it falling
+substantially short. The band is wide because the evidence is genuinely contested, not because
+we declined to look. The single widest contributor is the tax on structures, where the two
+best-identified studies disagree from one end of the range to the other.
+
+Two qualifications keep this from being read as more settled than it is. The counts above are
+stated at the central cell and are not invariant to it: across the \StxOpPointsTotal{}
+operating points the sweep covers, \StxOpPointsAnyAbove{} put at least one bundle \emph{above}
+the band --- the failure side --- under less favorable combinations of discount rate, capture,
+and haircut. And for the two largest bundles on the assessor's surface, the
+``consistent-with-succeeding'' half of the verdict rests on the wage family's upper bound,
+which is a modeled open-city ceiling rather than an estimate
+(Table~\ref{tab:bounds}); the wage-plus-structures bundle is the one whose inside-the-band
+standing survives on point estimates alone.
+
+\begin{figure}[htbp]\centering
+  \includegraphics[width=\linewidth]{kappa_star.pdf}
+  \caption{Break-even capitalization $\kappa^*$ by bundle and land surface, against the
+  bundle-weighted range of published estimates (grey). Points below the band fund themselves
+  more easily than published evidence requires; points inside it are consistent with both
+  success and failure.}
+  \label{fig:kappastar}
+\end{figure}
+
+\subsection{What moves the answer}
+
+Figure~\ref{fig:sensitivity} varies each input in turn for the third bundle. Ranked by the
+range each produces: the discount rate moves $\kappa^*$ by \StxSpanDiscountOpa{} on the
+assessor's surface (\StxSpanDiscountLycd{} on LYCD) across its swept range; the
+capture-and-haircut knob --- one knob, since $\kappa^*$ depends only on the product
+$\varphi(1-h)$ --- moves it by \StxSpanCapture{} across its grid; the land surface moves it by
+\StxSpanSurface{}; road rent by \StxSpanRoadRent{}. The land surface is not the largest of
+these, and this report should not be read as claiming it is.
+
+What sets the land surface apart is not its size but its kind. The discount-rate and
+capture ranges are the analyst's to choose: sweep them narrower --- over the
+\StxDiscountLowPct{}--\StxDiscountHighPct{} range we chose, or a tighter one --- and their
+spans shrink by construction. The land-surface gap is not a choice. It is a disagreement
+between two published assessments of the same parcels, and the only way to shrink it is to
+find out which assessment is wrong. The next section shows that, for the largest single
+component of the gap, the city's own sales records answer that question --- against both
+surfaces.
+
+\begin{figure}[htbp]\centering
+  \includegraphics[width=\linewidth]{sensitivity.pdf}
+  \caption{One-at-a-time sensitivity of $\kappa^*$ for the wage-plus-structures bundle. Each
+  bar spans the range that input produces with the others held at the central cell. Capture
+  and haircut share a row and are swept jointly, because $\kappa^*$ depends on them only
+  through the product $arphi(1-h)$; sweeping either alone would show half the range.}
+  \label{fig:sensitivity}
+\end{figure}
+
+\subsection{Where the truth is observable, both surfaces fail}
+
+The surface disagreement is not beyond evidence. For a bare lot, the sale price \emph{is} the
+land price --- the thing that makes land valuation hard everywhere else, separating land from
+structure, does not apply. A companion study in this project
+(\texttt{docs/VACANT\_LAND\_VALUATION.md}, reproducible from the city's recorded sales) runs
+that test on \StxVacantN{} bare-land sales. In aggregate, the assessor carries vacant land at
+\StxVacantOpaAgg{} its sale value; LYCD carries it at \StxVacantLycdAgg{}. The study
+attributes the majority of the citywide surface gap to this one property class, and finds that
+correcting it alone would cut the two surfaces' aggregate disagreement roughly in half ---
+the surfaces bracket the truth from opposite sides, and two independent corrections converge.
+
+Nor does either surface merely mis-level vacant land; both scatter it. On the same sales, the
+coefficient of dispersion is \StxVacantOpaCod{} for the assessor and \StxVacantLycdCod{} for
+LYCD, against a professional (IAAO) standard of 20 % noqa: hardcode -- fixed professional standard, not a result
+--- cheap lots over-assessed severalfold, expensive lots under-assessed by half. For this
+report that cuts two ways. It means the headline disagreement is largely a measurable,
+correctable assessment failure rather than an irreducible unknown. And it means that on the
+property class a land tax most needs to reach, \emph{neither} published surface currently
+supports accurate billing.
+
+\section{Caveats}
+
+\paragraph{This is a static ledger, with one exception.} No behavioral response to the tax
+reform is modeled: migration, agglomeration, changes in the built stock, and labor-supply
+effects are all absent. This is the point of the design --- $\kappa$ is precisely the channel
+through which those responses would arrive, and it is swept rather than assumed --- but it
+means the report cannot say what \emph{would} happen, only what would have to be true. The
+exception is road rent: the cordon figure below embeds a full behavioral response to the toll
+(entry reduction, mode shift, a steady state years out), because a toll revenue with no
+behavioral response would not be a meaningful number. That asymmetry is deliberate and it runs
+one way --- the tax side is static, the road-rent term is not.
+
+\paragraph{The published bounds are mostly for marginal changes.} Every \emph{empirical}
+estimate behind Table~\ref{tab:bounds} concerns a small change to a tax that continues to
+exist, while this program abolishes several taxes at once at full land-rent capture. Nothing in
+that evidence speaks to whether a marginal capitalization rate survives at that scale, and
+those bounds should be read as bracketing the marginal case only. The one exception is the wage
+family's upper bound, which is itself a full-abolition counterfactual for this tax in this city
+--- the right scale, but a modeled one rather than an observation.
+
+\paragraph{The wage family is the weakest link.} It is also the largest, at
+\StxBThreeWageSharePct{} of the third bundle and \StxBFiveWageSharePct{} of the full program.
+Its upper bound is a modeled ceiling that assumes perfect mobility, and its lower bound is
+transferred from a different tax in a setting without Philadelphia's large non-resident
+commuter base. Nothing published estimates the interior of that range.
+
+\paragraph{Full capture is a strong assumption.} Setting $\varphi = 1$ means collecting every
+dollar of assessed site rent. Where assessment is wrong, full capture collects the error too;
+the haircut sweep is a crude stand-in for that and for outright abandonment, not a model of it.
+
+\paragraph{Road and curb rents are small, and the curb omission's direction is unknown.} The
+central road-rent figure of \StxGCentralM{} a year comes from an external cordon-pricing model
+and is carried as a modeled input, never a verified one; it moves $\kappa^*$ less than any
+other input we sweep. Curb revenue is deliberately excluded, because Philadelphia already
+directs its on-street parking revenue to the City and the School District, and counting it
+again would let one dollar fund both today's spending and the reform. We do not claim that
+exclusion is conservative: pricing the cordon would itself suppress downtown trips and so
+reduce the very parking revenue the exclusion holds at today's level, and the only published
+efficient-pricing scenarios return less than the status quo. The net sign is unresolved and
+the magnitude is small either way.
+
+\section{What follows}
+
+The result that should change a reader's mind is not any single $\kappa^*$. It is that the
+answer swings by \StxSpanSurface{} depending on which published land surface you believe ---
+and that where the disagreement can be tested against sales, both surfaces fail. The ledger
+cannot adjudicate between them; the city's own recorded sales, on the one property class where
+land value is directly observable, partially can, and they convict both.
+
+Philadelphia is being asked to consider a reform whose entire logic runs through the value of
+its land, and the city does not have a settled measurement of what its land is worth. The two
+published answers differ by \StxSurfaceGapPct{} in aggregate, disagree about which
+neighborhoods hold the value, and --- where they can be checked --- are wrong in opposite
+directions, at dispersion several times the professional standard. Before the city can price a
+land-value tax, it has to be able to assess land. Unlike the capitalization question, that
+failure is already measured, already localized to a property class, and addressable with
+records the city already collects.
+
+That is a smaller ask than a single tax, and a more urgent one. It is also a prerequisite: any
+version of this reform, at any ambition, inherits whichever land surface the assessor produces.
+Getting that measurement right is not a technical preliminary to the debate about land value
+taxation. On the evidence here, it \emph{is} the debate.
+
+\paragraph{Reproducibility.} Every number, table, and figure in this report is generated by
+\texttt{paper/scripts/generate\_paper\_assets.py} from the analysis outputs; rebuild with two commands (regenerate, then compile). The underlying model, its specification and the
+evidence base behind the $\kappa$ bounds are in the project repository, along with three dated
+audits: a self-check and an independent adversarial pass over the ledger, and an independent
+pre-publication audit of this report, whose findings are applied here.
+
+\end{document}
