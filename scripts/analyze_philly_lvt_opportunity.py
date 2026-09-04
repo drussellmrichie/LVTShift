@@ -49,6 +49,10 @@ A site must clear the citywide median on BOTH demand signals; the ranking among
 those is by underused_acres. Nothing here is hand-typed: every figure in the
 outputs is computed from the source layers (see global CLAUDE.md).
 
+Inputs beyond the shared parcel cache: `opa_building_area.parquet` (the floor-area
+numerator) and `neighborhoods.gpq` (site naming). Both are gitignored; build them
+with `python scripts/fetch_philly_opportunity_inputs.py`.
+
 Outputs: analysis/data/philadelphia_lvt_opportunity_sites.csv
          analysis/reports/philadelphia/lvt_opportunity_sites.json
 """
