@@ -135,6 +135,32 @@ The remedy is mechanical, not vigilance: make the artifact the source (a test th
 sibling JSON, a provenance frame exported beside the data), and point prose at generated
 tables instead of restating their values.
 
+### The third recurring shape: a synthetic test that agrees with itself
+
+The first two shapes are about reading the wrong quantity. This one is about reading it on the
+wrong data. A test written from the same mental model as the code it checks will pass on
+fixtures built from that model, and only real data disagrees. Every instance so far was caught
+by running against the parcel cache or the sales file, never by the test suite:
+
+- **The abated-parcel override.** A unit test compared two calls that were equally wrong and
+  passed; the cache showed $16.4B of building value silently zeroed.
+- **Pro-rata institutional relief** classified as an abatement — the synthetic fixture had no
+  parcel whose relief was split across both lines in the parcel's own ratio.
+- **The exemption rule's reconstruction residual** read as a tax change, on parcels whose
+  recorded homestead disagrees with the relief actually applied. No fixture has that
+  disagreement, because it is a data defect, not a rule.
+- **Borrowed incentive tests** (openavmkit's Lars-Tests) that, run on Philadelphia's geography,
+  rewarded a *flat* land surface — one compared values across a lot-size quartile, another
+  grouped by clusters whose members average 7 km apart. Both ranked the candidates backwards
+  until their grouping was checked against the ground.
+- **A stubbed calibration** that left raw values in files the pipeline reads as calibrated.
+  Nothing errored; the only symptom was the numbers, and only a diff against the other file
+  showed it.
+
+The remedy is a habit, not a guard: **before trusting a new mechanism, run it on the real data
+and look at the distribution, not just the assertion.** Where the fixture cannot express the
+failure — a data defect, a real geography — say so in the test and check the cache instead.
+
 ### Jurisdiction-Specific Patterns
 
 The tax base works differently by state; `model-policy.md` documents all real patterns with code. Examples: Ohio's 35% assessment ratio (Cincinnati), Minnesota Tax Capacity class rates (St. Paul), derived millage from observed bills (Baltimore), dual homestead/non-homestead rates (Rochester), per-levy abatement (Spokane), Texas entity-specific homestead/over-65 exemptions (Bryan, College Station).

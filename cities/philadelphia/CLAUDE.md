@@ -190,76 +190,51 @@ precedes any rate change. Export: `analysis/data/philadelphia_lycd_reassessment_
 stacked 4:1 split-rate lives only in the `reassess_change` / `lvt_change` / `total_change`
 decomposition columns. Background and the method's limits: `docs/LYCD_LAND_MODEL_ROADMAP.md`.
 
-Two shared functions in `lvt/philadelphia.py` carry the modeling choices, so the notebook cannot
-drift from the LVT notebooks by construction:
+Four shared functions in `lvt/philadelphia.py` carry the modeling choices, so the notebook cannot
+drift from the LVT notebooks by construction. **Every measured effect of these — land bases,
+millages, parcel counts — lives in `docs/LYCD_LAND_MODEL_ROADMAP.md` and the generated exports;
+quote from there, not from here.**
 
 - **`compute_lycd_land_values`** is the LYCD construction (lot-area chain, GMA-hierarchical zone
   medians, KNN fallback, improved-only market-value cap) as one function with a diagnostics dict.
-  All four LYCD notebooks now call it — `model_lycd.ipynb`, `model_lycd_post_abatement.ipynb`,
-  `model_lycd_refined_prototype.ipynb` (all migrated 2026-09-04) and
-  `model_lycd_reassessment.ipynb`. Every migrated notebook's re-executed output was bit-for-bit
-  identical to its prior inline construction, including the refined prototype's two
-  refinements. `model_lycd_reassessment.ipynb` additionally asserts its land base over taxable
-  parcels equals the tracked `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum
-  to 1e-6 relative — identical construction on identical inputs, so any difference means a
-  stale export or a divergence.
+  All four LYCD notebooks call it; each migration was verified bit-for-bit against the prior
+  inline construction. `model_lycd_reassessment.ipynb` additionally asserts its land base over
+  taxable parcels matches the tracked `philadelphia_lycd_ty<YEAR>.csv` export to 1e-6 relative —
+  identical construction on identical inputs, so any difference means a stale export or a
+  divergence.
 
-  **The KNN fallback now imputes a rate, not a dollar value** (2026-09-05): an unmatched
-  parcel takes the median $/sqft of its nearest neighbours and applies it to its OWN area,
-  instead of inheriting a neighbour's dollar land value regardless of size. Re-executing all
-  four notebooks with this fix moved the citywide land base from $62.54B to $66.19B over
-  taxable parcels (ratio 1.44x to 1.54x of OPA's) — a real, no-downside correction, not a
-  refactor, so all four notebooks' numbers moved.
+  **The KNN fallback imputes a rate, not a dollar value.** An unmatched parcel takes the median
+  $/sqft of its nearest neighbours and applies it to its OWN area; imputing a neighbour's dollar
+  land value ignores the parcel's size. The same rule governs `_knn_median_fill` everywhere in
+  this module.
 
-  **The market-value cap has an opt-in `cap_include_building` parameter, off by default —
-  do not turn it on without reading its docstring first.** It closes a real, large problem
-  (24.4% of taxable parcels already have land + building above market_value under the plain
-  cap, $9.31B in aggregate) but at a cost the roadmap's original "cap land plus building at
-  market" framing did not anticipate: since `market_value` is OPA's own
-  `taxable_land + taxable_building`, the tightened cap reduces to capping land at
-  essentially OPA's own estimate for any otherwise-uncapped parcel, dropping 23.9% of
-  single-family parcels to exactly OPA's ~0.20 default ratio and cutting the citywide
-  LYCD/OPA ratio from 1.54x to 1.32x. Left off — not the recommended fix for this problem.
+  **`cap_include_building` is opt-in and off by default — do not turn it on without reading its
+  docstring.** Capping land at `market_value - taxable_building` sounds like the fix for land +
+  building exceeding market value, but `market_value` IS OPA's own `taxable_land +
+  taxable_building`, so it collapses land back onto OPA's own estimate and re-creates the
+  default-ratio artifact LYCD exists to break.
 
-  **The recommended fix is `compute_residual_building_value` + `carry_forward_exemptions`'s
-  `gross_building_override`, wired into all three split-rate LYCD notebooks**
-  (`model_lycd.ipynb` 2026-09-06; `model_lycd_post_abatement.ipynb` and
-  `model_lycd_refined_prototype.ipynb` 2026-09-07). Holds land at LYCD's full value and lets
-  BUILDING absorb the correction instead (`market_value - land`, then exemptions
-  re-applied so they net exactly once) — no collateral damage to the land finding, unlike
-  the cap option. Restricted to non-abated parcels already in today's taxable base
-  (`full_exmp == 0`) — deliberately not extended to homestead-wiped re-entry, which is
-  `model_lycd_reassessment.ipynb`'s question, not these notebooks'; each notebook asserts
-  zero re-entries as a guard that this restriction is doing its job, plus a no-overshoot
-  assertion (non-vacant, ordinary-taxable) on every run. All three re-executed cleanly,
-  revenue exactly neutral, reform improvement base falling from $126.21B to $121.97B in
-  `model_lycd.ipynb` and `model_lycd_post_abatement.ipynb` (identical, since both build the
-  reform base from the same land and the same exemption logic) and to $120.75B in the
-  refined prototype (whose larger LYCD land base makes the same correction slightly
-  larger). `model_lycd_reassessment.ipynb`'s drift check (which reads `model_lycd.ipynb`'s
-  exported land base, untouched by any of this) still passes.
+  **The recommended fix for that overshoot is `compute_residual_building_value` +
+  `carry_forward_exemptions`'s `gross_building_override`**, wired into all three split-rate LYCD
+  notebooks. Land keeps LYCD's full value and BUILDING absorbs the correction
+  (`market_value - land`, exemptions then re-applied so they net exactly once). Restricted to
+  non-abated parcels already in today's taxable base (`full_exmp == 0`) — deliberately not
+  extended to homestead-wiped re-entry, which is `model_lycd_reassessment.ipynb`'s question;
+  each notebook asserts zero re-entries and no overshoot on every run.
 
-  **One sharp gotcha, worth re-reading before touching this code: abated parcels must be
-  excluded from the `carry_forward_exemptions` call entirely, not passed through it with an
-  override.** That function's exemption-netting always subtracts a parcel's own historical
-  exempt total from whatever building value it is given; for an abated row that total IS
-  `exempt_building`, so supplying it back as the override cancels it to zero instead of
-  preserving it. A synthetic unit test that looked like it caught this passed anyway, because
-  it was comparing two calls that were equally wrong to each other — the real cache is what
-  actually caught it ($16.4B silently zeroed). Every notebook's Step 6 keeps its abated
-  cohort on its existing `exempt_building` restoration (in `model_lycd_post_abatement.ipynb`,
-  on whatever Step 5's post-abatement baseline already set for it), entirely separate from
-  this mechanism. See `docs/LYCD_LAND_MODEL_ROADMAP.md` Stage A item 4 for the full account
-  and the exact numbers.
+  **Abated parcels must be excluded from the `carry_forward_exemptions` call entirely, not
+  passed through it with an override.** Its exemption-netting always subtracts a parcel's own
+  historical exempt total from whatever building value it is given; for an abated row that total
+  IS `exempt_building`, so supplying it back as the override cancels it to zero rather than
+  preserving it. Each notebook's Step 6 keeps its abated cohort on its existing `exempt_building`
+  restoration, separate from this mechanism. Regression test:
+  `test_carry_forward_override_cannot_preserve_abated_building`.
 
-  Two of the function's parameters exist only for the refined prototype and default to the
-  base behavior for everyone else: `zone_group_col` (a column name; when given, zone medians
-  are computed per (group, GMA level) cell instead of pooling every improved parcel type
-  together — the prototype's Q2 refinement) and `land_pct_improved` accepting a per-parcel
-  `pandas.Series` in addition to a scalar (the prototype's Q1 refinement, an FHFA tract land
-  share for core-residential categories). Both refinements' Philadelphia-specific inputs — the
-  FHFA join, the residential-context and core-residential category sets — stay in the
-  notebook; only the zone-median and land-value math itself moved into the shared function.
+  Two parameters exist only for the refined prototype and default to base behaviour:
+  `zone_group_col` (zone medians per (group, GMA level) cell instead of pooling every improved
+  parcel type) and `land_pct_improved` accepting a per-parcel `pandas.Series` (an FHFA tract land
+  share for core-residential categories). Both refinements' Philadelphia-specific inputs stay in
+  the notebook; only the zone-median and land-value math is shared.
 - **`carry_forward_exemptions`** is the rule for "same methodology, land valued differently":
   the Homestead Exemption is re-applied as `min(cap, new total)`, building-first (so a homestead
   whose LYCD land lifts it above the cap becomes taxable again — the "re-entering" cohort);
@@ -279,37 +254,33 @@ drift from the LVT notebooks by construction:
   about what is held fixed. Consequence, asserted in the notebook on every run: with total and
   rate fixed, the only bills that can move are those whose exemption depends on the split —
   abatement-type relief (`exemption_kind == 'building_share'`); homestead, partial relief on
-  total value, and vacant parcels are bit-for-bit unchanged. Two things the synthetic tests
-  did not catch and the real cache did: (1) relief that fits inside the building line but is
-  split pro-rata across land and building is a share of *total* value, not an abatement —
-  classify on `exempt_land` net of homestead spill, not on fit alone; (2) read the effect off
-  `.reform_change` (rule on new land minus rule on OPA's land), never against OPA's *recorded*
-  taxable total, or the rule's 0.5% reconstruction residual (parcels whose recorded homestead
-  disagrees with the relief applied) shows up as a tax change on parcels the reform cannot
+  total value, and vacant parcels are bit-for-bit unchanged. Two rules that assert cost real
+  work to get right: relief that fits inside the building line but is split pro-rata across
+  land and building is a share of *total* value, not an abatement, so classify on `exempt_land`
+  net of homestead spill rather than on fit alone; and read the effect off `.reform_change`
+  (rule on new land minus rule on OPA's land), never against OPA's *recorded* taxable total, or
+  the rule's reconstruction residual shows up as a tax change on parcels the reform cannot
   touch. Export columns: `alloc_*`, `exemption_kind`, `norollback_new_tax`, `abated`,
   `market_value`, `taxable_total`, `dor_area_sqft`, `lycd_zone_psf`, `gma3` — the last five
   exist so the report generator can run the ordinance's uniformity tests without the cache.
-
-- **`paint_land_surface`** (2026-09-05, notebook Step 2b, `LVT_LAND_SURFACE=<column>`) swaps
-  an externally estimated land **rate** onto this repo's parcels. The surface comes from
-  `philly_open_avmkit/notebooks/pipeline/run_land_surfaces.py` (`out/land/land_surfaces_ty<YEAR>.csv`,
-  keyed `parcel_number`, several candidate $/sqft columns; `s2_k20` is the sales-interpolated
-  surface, `s3` the schedule). It imports a rate, never a dollar value, and multiplies by this
-  repo's own `dor_area_sqft` — the two repos' areas agree within 5% on 99.9% of joined parcels,
-  but a rate keeps them decoupled by construction. Coverage is why it is a function and not a
-  merge: about 55k parcels (a fifth of market value) are not in the AVM universe; they take the
-  median rate of their nearest matched neighbours via the same `_knn_median_fill` LYCD uses and
-  are flagged `land_surface_source == 'knn'`. The improved cap is LYCD's, so a swap changes the
-  rate and nothing else; `n_land_exceeds_total` counts where the surface's land alone exceeds
-  OPA's total before the cap (a § 3(c) finding about the totals). The export slug and
+- **`paint_land_surface`** (notebook Step 2b, `LVT_LAND_SURFACE=<column>`) swaps an externally
+  estimated land **rate** onto this repo's parcels, from
+  `philly_open_avmkit`'s `out/land/land_surfaces_ty<YEAR>.csv` (keyed `parcel_number`; `s2_k20`
+  is the sales-interpolated surface, `s3` the schedule). It imports a rate, never a dollar
+  value, and multiplies by this repo's own `dor_area_sqft`, which keeps the two repos' area
+  conventions decoupled by construction. Coverage is why it is a function and not a merge: tens
+  of thousands of parcels are not in the AVM universe at all; they take the median rate of their
+  nearest matched neighbours via `_knn_median_fill` and are flagged
+  `land_surface_source == 'knn'`. The improved cap is LYCD's, so a swap changes the rate and
+  nothing else; `n_land_exceeds_total` counts where the surface's land alone exceeds OPA's total
+  before the cap (a § 3(c) finding about the totals, not about the surface). The export slug and
   `MODEL_TYPE` carry the surface name so runs never overwrite the LYCD export, and every
   downstream step (both readings, the assertions, the census join) is surface-agnostic.
 
 The report's § 3(b) section also carries four incentive tests from
-`philly_open_avmkit/notebooks/pipeline/land_tests.py` (improvement-neutrality on matched
-pairs, within-market-area uniformity, boundary discontinuity, Moran's I on ratio residuals),
-read from that repo's `out/land/land_tests.csv`. That file carries the tests' own parameters
-alongside their results so the paper's caption cites generated values.
+`philly_open_avmkit/notebooks/pipeline/land_tests.py`, read from that repo's
+`out/land/land_tests.csv` — which carries the tests' own parameters beside their results, so the
+paper's caption cites generated values rather than retyped ones.
 
 The PPI report on both readings and the ordinance's own tests lives in
 `analysis/lycd_reassessment/philadelphia/paper/` (generator-driven; `Report.tex` carries no
