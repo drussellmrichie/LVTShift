@@ -37,13 +37,48 @@ Philadelphia parcel data comes from the **OPA (Office of Property Assessment)** 
 
 **Philadelphia category classification uses four stacked overrides** (in order):
 1. `taxable_building <= 0` → "Vacant Land" (catch-all for zero-improvement parcels)
-2. Non-vacant OPA code AND `taxable_building <= 0` AND `taxable_land > 0` → "Abated / Construction Exemption" (active 10-year construction abatement)
+2. Non-vacant OPA code AND `taxable_building <= 0` AND `taxable_land > 0` → split three ways by
+   `lvt.philadelphia.split_zero_building_parcels` (see below)
 3. Vacant OPA code (6/12/13) AND `taxable_building > 0` → "Improved Vacant Land" (OPA calls it vacant but carries a building record; ~1,500 parcels with small structures)
 4. `full_exmp = 1` (both taxable values = 0) → "[OPA category] — Exempt" (reclassifies exempt parcels out of "Vacant Land" into typed buckets)
 
 Always apply these in this order. Override 3 before Override 4 matters: the full-exempt check must come after the improved-vacant reclassification or some parcels can end up in the wrong bucket.
 
-**Abated parcels: impute building value for the reform scenario.** Parcels with `taxable_building = 0` and active abatements have LR=1.0 in the split-rate base, producing an artificially large result. Fix: set `model_building = 4 × taxable_land` (restoring OPA's implicit 20% land ratio) for the reform calculation only. Keep `current_tax` as actual (land-only). Add $12.5B to the reform improvement base; both millages decrease ~5%. The "Abated / Construction Exemption" category shows +315.5%, representing the shift from an almost-free land-only bill to a full LVT bill on the estimated complete value.
+**A $0 taxable building line does not mean "abated" — it has three causes, and conflating them
+silently revoked ~13K homesteaders' Homestead Exemption.** Override 2 originally treated every
+non-vacant parcel with `taxable_building <= 0` as an active construction abatement. About half of
+that cohort is instead an ordinary homesteaded rowhome whose building assessment is *smaller than
+the Homestead Exemption*, so the exemption consumes the whole building line and spills onto land.
+Those parcels then got the abated treatment — `model_building` restored from `exempt_building` —
+which taxed away a homestead that every other homesteader in the city kept. By dollars the error
+was invisible (the genuine abatements hold ~93% of the exempt building value, so the solved
+millages barely moved), which is the guard-shape failure again: the aggregate that was checked is
+not the quantity that broke.
+
+The discriminator is the exempt total against the year's statutory Homestead Exemption, which is a
+flat amount and so can never explain more than its own cap:
+- `exempt_total > cap` → an abatement is present.
+- `0 < exempt_total <= cap` → homesteaded parcel, restored to its OPA category. It keeps its
+  exemption under the reform, so its $0 building line is already correct — do not impute one.
+- `exempt_total == 0` → the improvement really is worth $0; leave it as Override 1 set it.
+
+`split_zero_building_parcels` implements this and is shared by all six classifying notebooks
+rather than copy-pasted (this bug was in all six). It takes the cap from
+`tax_year_params(year).homestead_exemption` — never a literal, because the amount has moved four
+times ($30K → $40K → $45K → $80K → $100K, empirically confirmed against the `assessments` billing
+table) and the wrong year's cap moves parcels across the boundary with no visible symptom. It
+guards itself against OPA's own per-parcel `homestead_exemption` flag and raises if fewer than 85%
+of the parcels it called homestead-zeroed actually carry a homestead; a wrong cap drops that rate
+to 6-24%.
+
+**The homestead-zeroed parcels still show a large *percentage* increase (small in dollars), and
+that is a real result, not residue of the bug.** Their entire remaining taxable base is land, so a
+land-heavy millage hits all of it. Note this depends on OPA applying the Homestead Exemption to the
+building line first and the remainder to land; had it been applied land-first these parcels would
+show a *decrease*. The allocation is OPA's, not a modeling choice, but it is load-bearing for this
+cohort.
+
+**Abated parcels: restore the building value from `exempt_building`, do not impute it.** A parcel with an active abatement has `taxable_building = 0`, so it enters the split-rate base at LR=1.0 and looks like pure land. The reform scenario needs its real improvement value back. OPA already records it: `exempt_building` is the assessed building value being exempted, and `market_value − (taxable_land + exempt_land)` reproduces it to the dollar. Use it, with a `market_value − taxable_land` fallback for the mid-construction parcels where `exempt_building = 0`. Keep `current_tax` as actual (land-only). This previously imputed `model_building = 4 × taxable_land`, inverting OPA's 20%-land default ratio — a reconstruction standing in for an observed quantity, and biased: it recovered a median 0.72× of the recorded value (p10 0.23) and understated the restored base by ~20%. Both `model.ipynb` and `model_post_abatement.ipynb` now use the observed column, so the pre/post pair varies only the abatement treatment rather than also varying how the improvement value is estimated.
 
 **Fully exempt SFR parcels are low-value homesteaders, not vacant lots.** ~27K SFR parcels with `market_value <= $80K` have their entire assessed value wiped out by the Homestead Exemption. They show up as `full_exmp=1` and end up in "Vacant Land" if not reclassified. Override 4 moves them to "Single Family Residential — Exempt."
 

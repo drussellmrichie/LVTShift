@@ -13,6 +13,12 @@ varchar — the year must be quoted or Carto returns HTTP 400.
 The cache must always emit the full column superset, because different notebooks need
 different parts of it:
   - taxable_land / taxable_building / market_value / exempt_land / exempt_building — all models
+  - homestead_exemption — the guard behind `split_zero_building_parcels`, which separates
+    abated new construction from homesteaded rowhomes whose building line nets to $0.
+    NOTE this one is CURRENT-vintage: `opa_properties_public` carries only today's
+    homestead flag, so for an older tax year it answers "does this parcel claim homestead
+    now", not "did it claim homestead then". That is why the split itself keys on the
+    year's statutory cap from `tax_year_params`, and this column is only the cross-check.
   - pin + total_area — the LYCD notebooks' lot-area chain
   - owner_1 + owner_2 — the owner-concentration analysis in model.ipynb
 `pin` is kept integer-typed: the LYCD notebooks stringify it as a join key, and a float
@@ -69,7 +75,8 @@ def build(year: int, force: bool = False) -> Path:
 
     print("Downloading current OPA properties (geometry, class, owner, PIN, lot area) ...")
     opa = _carto_csv(
-        "SELECT parcel_number, pin, category_code, total_area, owner_1, owner_2, the_geom "
+        "SELECT parcel_number, pin, category_code, total_area, owner_1, owner_2, "
+        "homestead_exemption, the_geom "
         "FROM opa_properties_public"
     )
     opa["parcel_number"] = opa["parcel_number"].astype(str)
@@ -86,12 +93,12 @@ def build(year: int, force: bool = False) -> Path:
     gdf = gdf[gdf["geometry"].notna()].copy()
     print(f"  {len(gdf):,} parcels with geometry")
 
-    for col in VALUE_COLS + ["total_area"]:
+    for col in VALUE_COLS + ["total_area", "homestead_exemption"]:
         gdf[col] = pd.to_numeric(gdf[col], errors="coerce").fillna(0.0)
     gdf["pin"] = pd.to_numeric(gdf["pin"], errors="coerce").astype("Int64")
 
     missing = {"parcel_number", "pin", "category_code", "total_area", "owner_1", "owner_2",
-               *VALUE_COLS} - set(gdf.columns)
+               "homestead_exemption", *VALUE_COLS} - set(gdf.columns)
     if missing:
         raise RuntimeError(f"cache is missing required columns: {sorted(missing)}")
 
