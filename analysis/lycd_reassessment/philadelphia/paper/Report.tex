@@ -1,6 +1,7 @@
 \documentclass[11pt]{article}
 \usepackage[T1]{fontenc}      % proper glyphs (<, >, |) and hyphenation
 \usepackage{lmodern}
+\usepackage{amsmath}
 \usepackage[margin=1in]{geometry}
 \usepackage{graphicx}\graphicspath{{figures/}}
 \usepackage{booktabs}
@@ -10,6 +11,11 @@
 \usepackage{hyperref}
 \usepackage{xurl}              % break long URLs at safe characters
 \usepackage[htt]{hyphenat}    % allow breaks inside \texttt{} (file paths)
+% Float budget: a short document with many floats otherwise strands them after the last section.
+\renewcommand{\topfraction}{0.9}
+\renewcommand{\bottomfraction}{0.7}
+\renewcommand{\textfraction}{0.1}
+\renewcommand{\floatpagefraction}{0.75}
 \sloppy                        % prefer loose spacing over right-margin overflow
 \emergencystretch=3em          % last-resort stretch for unbreakable lines
 \input{ppi-theme.tex}
@@ -17,14 +23,14 @@
 % Generated headline numbers — produced by paper/scripts/generate_paper_assets.py.
 % Run that generator BEFORE writing/compiling prose; never type result numbers here.
 \InputIfFileExists{tables/headlines.tex}{}{}
-% Fallback so the skeleton compiles before the generator has run:
-\providecommand{\LycdHeadline}{\textbf{[run generate\_paper\_assets.py]}}
 
 \begin{document}
 
 \begin{center}
   \IfFileExists{figures/ppi-logo.pdf}{\includegraphics[height=1.3cm]{ppi-logo}\\[0.6em]}{\IfFileExists{figures/ppi-logo.png}{\includegraphics[height=1.3cm]{ppi-logo}\\[0.6em]}{}}{\LARGE\bfseries\color{ppiprimary} Fixing Philadelphia's land assessments without moving anyone's total\par}
-  \vspace{0.5em}
+  \vspace{0.35em}
+  {\large\color{ppidark} What a zone-rate land allocation would do to tax bills, and how it measures against the draft land-assessment ordinance\par}
+  \vspace{0.7em}
   {\large Russell Richie\par}
   \vspace{0.2em}
   {\normalsize Progress and Poverty Institute\par}
@@ -33,42 +39,494 @@
 \end{center}
 \vspace{1em}
 
-
-
 \begin{abstract}
-Executive summary: the claim in one or two sentences, the headline numbers (as generated
-macros, e.g.\ \LycdHeadline{}), and the policy implication. Write this after the
-assets exist and you have read them.
+\noindent A draft ordinance before Philadelphia City Council would, for the first time, tell
+the Office of Property Assessment what the land half of an assessment has to mean --- the
+market value of the lot as if vacant --- and forbid the shortcut OPA uses today, which is to
+call land a fixed fifth of whatever the whole property is worth. This report asks what the
+smallest change that satisfies the ordinance's purpose would do to tax bills, using the
+simplest candidate: keep the fixed fraction, but apply it to a market-area rate per square
+foot instead of to each parcel's own total (the ``LYCD'' allocation). Two readings of that
+proposal give opposite answers. Read as a \emph{revaluation}, with land re-valued and the
+building left alone, it moves every bill in the city and cuts \LycdADownTenPct{} of them by
+more than a tenth --- but two-thirds of the increases land on vacant lots, where the method's
+land values run \LycdSalesLYCDAgg{} what those lots actually sell for, and the sum of land and
+building exceeds the parcel's own assessment on \LycdAOvershootPct{} of improved parcels. Read
+as the ordinance is written --- a re-split \emph{inside} each parcel's unchanged total, with
+the tax rate untouched --- it moves \LycdCMoved{} bills (\LycdCMovedPct{}), every one of them a
+parcel with a construction abatement, and lowers the levy by \LycdCLevyAbsM{} (\LycdCLevyPct{}),
+because OPA today assesses abated lots at \LycdUniOPAAbatedRatio{} their neighbours'. On the
+ordinance's own uniformity tests the two methods fail different clauses: OPA's land component
+is a deterministic function of the building on it (rank correlation \LycdUniOPABuildingCorr{}
+across \LycdUniCells{} zone-and-lot-size cells), while the raw allocation gives a vacant lot
+\LycdUniLYCDVacantImprovedRatio{} the land rate of the identical improved lot beside it. The
+re-split inherits the better half of each. What it cannot do is make land values \emph{accurate}
+on the one class where accuracy can be checked against sales, and the ordinance's accuracy
+report would say so in its first year.
 \end{abstract}
 
-\section{Background}
-% The policy question and why it matters.
+\section{The question}
 
-\section{Data and methods}
-% Sources (with vintage), how key quantities are computed, main assumptions, precedents.
+Section 2-305 of the Philadelphia Code already requires OPA to publish a methodology and an % noqa: hardcode
+annual assessment-sales ratio study, and to submit to an independent audit every three years.
+None of those provisions says anything about the land component of an assessment. OPA
+publishes a land value and an improvement value for every parcel, and nothing in the Code says
+what the land value must represent or requires anyone to test whether it does. The draft
+ordinance now circulating in discussion form would close that gap in three moves: a standard
+(the land component ``shall closely approximate the market value of the land as if vacant''
+and ``shall not vary among similarly situated parcels on the basis of the presence, absence,
+condition, or value of improvements''); a prohibition (it ``shall not be determined by the
+application of a fixed percentage or ratio to total assessed value''); and a test (a separate
+annual land value accuracy report, with the same statistical standards the total already faces).
 
-\section{Results}
-% WRITE THIS AFTER generating and inspecting the assets. One sentence per figure/table on
-% what it shows. Use macros for every inline number. Example float scaffolding:
-%
-% \begin{figure}[t]\centering
-%   \includegraphics[width=\linewidth]{example.pdf}
-%   \caption{What this shows.}\label{fig:example}
-% \end{figure}
-%
-% \begin{table}[t]\centering
-%   \caption{What this shows.}\label{tab:example}
-%   \input{tables/example.tex}
-% \end{table}
+The prohibition is aimed at a specific practice. In the TY\LycdTaxYear{} roll,
+\LycdDefaultRatioOpaPct{} of the city's \LycdDefaultRatioImprovedParcels{} improved parcels carry a
+land component that is exactly \LycdDefaultRatioOpaMode{} of their total assessment
+(Figure~\ref{fig:defaultratio}). That is not a market finding; it is a rule of thumb. It has a
+consequence the ordinance's findings name directly --- it ``distort[s] the taxable base of
+properties receiving partial exemptions or abatements'' --- and a consequence they do not name,
+which matters more for anything Council might later want to do with land values: a land
+component that is a fixed share of total value is, by construction, a function of the building.
+Two identical lots on the same block get different land values if one has a nicer house on it.
+
+The live question is what to replace the rule of thumb with. The ordinance's answer is the
+full appraisal toolkit --- vacant sales, teardown sales, extraction from improved sales, paired
+sales, location value surfaces --- and an interim certification for any class where the
+evidence is too thin. That is the right long-run answer. But it is a multi-year build for an
+office that has never modeled land, and there is a much smaller change available in the
+meantime: keep the fixed fraction, and stop applying it to the parcel's own total. Apply it
+instead to a rate per square foot estimated for the parcel's market area, and multiply by the
+lot. The land value then depends on where the lot is and how big it is, and on nothing else.
+That is the construction this report tests, under the name it carries in the modeling
+literature, LYCD.\footnote{``Least You Can Do'' (Lars Doucet). For an improved parcel,
+$\text{land} = \LycdLycdKImproved{} \times \text{median}(\text{total value}/\text{lot area})_{\text{zone}} \times \text{lot area}$,
+with the zone taken from OPA's own Geographic Market Area hierarchy. For a vacant parcel the
+multiplier is \LycdLycdKVacant{}. Land is capped at the parcel's own total. The construction,
+its defects, and the path from it to an assessor-grade land model are documented in
+\texttt{docs/LYCD\_LAND\_MODEL\_ROADMAP.md} in the LVTShift repository.}
+
+Two things follow that a reader should hold onto. First, this proposal would fall inside the
+ordinance's prohibition as drafted --- it is a fixed percentage applied to total value, one
+step removed --- so adopting it means amending the prohibition, and Section~\ref{sec:language}
+offers language. Second, ``use it to value land'' can mean two different reforms, and they
+have opposite effects on bills. The next section separates them.
+
+\section{Two reforms wearing one name}\label{sec:readings}
+
+Suppose OPA replaced its land component with the zone-rate allocation and left the tax rate
+alone. What happens to a bill depends entirely on what happens to the \emph{building}
+component, and there are two defensible answers.
+
+\begin{enumerate}
+\item \textbf{Revaluation.} The new land value is added to OPA's existing building value. The
+  parcel's total assessment changes --- upward, for most parcels, since the allocation puts more
+  value in land than OPA's fifth does. Every bill in the city moves. If the rate is then rolled
+  back so the levy is unchanged (reading A), the question is who wins and who loses; if it is
+  not (reading B), the levy simply rises.
+\item \textbf{Re-split.} The parcel's total assessment is held where OPA put it, and the new
+  land value is carved out of it; the building component becomes the remainder. This is what
+  the ordinance describes. Its Section~3(c) makes land and improvement ``complementary parts of
+  a single assessment at actual value,'' and its findings assert that the change ``does not
+  alter the total assessed value of any parcel, the applicable tax rate, or the tax liability of
+  any property that is not subject to a partial exemption or abatement.'' With the total and the
+  rate both fixed, a bill can only move if some exemption depends on how the total is split.
+  The Homestead Exemption does not --- it is a flat amount off the total. The ten-year
+  construction abatement does --- it exempts the assessed value of the \emph{improvement}. So
+  only abated and partially-exempt parcels can move (reading C).
+\end{enumerate}
+
+\begin{table}[t]
+  \centering
+  \caption{Three readings of ``LYCD land, rates unchanged.'' Only the third is the reform the
+  ordinance describes. Bills counted over the \LycdBilledParcels{} parcels with a nonzero bill
+  today.}
+  \label{tab:scenarios}
+  \input{tables/scenarios.tex}
+\end{table}
+
+Table~\ref{tab:scenarios} puts the three side by side. The revaluation readings move
+\LycdBilledParcels{} bills; the re-split moves \LycdCMoved{}. That difference is not a
+modeling choice. It is the difference between a reform that changes what properties are worth
+and a reform that changes what the two lines on an assessment notice mean. The ordinance is
+the second kind, and the rest of this report treats the re-split as the primary result and
+the revaluation as the contrast that shows what is \emph{not} being proposed.
+
+\section{Data and method}
+
+Every parcel figure comes from OPA's certified TY\LycdTaxYear{} roll (\LycdParcels{} parcels;
+\LycdBilledParcels{} with a nonzero bill after the Homestead Exemption, abatements and
+institutional exemptions), at the year's combined City and School District rate of
+\LycdMillage{} mills. The zone-rate land allocation is computed exactly as the LVTShift
+repository's four Philadelphia land-tax models compute it, from one shared function, and is
+checked against the tracked export of those models on every run.
+
+\paragraph{Carrying exemptions through a changed split.} Both readings need every existing
+exemption re-applied to a parcel whose land component has moved. The rule: the Homestead
+Exemption is re-applied as the statutory amount or the total, whichever is smaller, against
+the building line first; an abatement is a share of the building line (the abated dollars
+divided by the building) and is re-applied as that share of the new building component; partial
+institutional relief that reaches the land line is a share of total value and is carried in
+dollars; a parcel that is fully exempt for a reason the homestead cannot explain stays fully
+exempt. The rule is validated by reconstruction: feeding OPA's own land back through it must
+reproduce OPA's own taxable value parcel by parcel, and it does so on \LycdReconMatchPct{} of the roll. The
+remaining half-percent are parcels where OPA's recorded homestead flag disagrees with the
+relief actually applied; the re-split's effect is measured against the rule's own
+reconstruction rather than against the recorded bill, so that residual cancels instead of
+appearing as a tax change.\footnote{This mattered. Measured against recorded bills, the
+re-split appeared to move about two thousand additional parcels whose exemption does not
+depend on the split at all. Every parcel the re-split moves is asserted, on every run, to carry
+abatement-type relief.}
+
+\paragraph{The ordinance's tests.} Section~3(b)'s uniformity standard and Section~4(c)'s
+required tests are operationalized within OPA's own finest market geography (the L3 Geographic
+Market Area), comparing land value per square foot for vacant against improved parcels, for
+abated against unabated parcels, and --- the sharpest form --- rank-correlating land value with
+building value among improved parcels in the same zone and the same lot-size quartile. Its
+accuracy standard is tested the only way it can be for a land value: against sales of bare
+lots, where the sale price is the land price. That study uses \LycdSalesN{} vacant sales since
+2023, filtered to plausible lot sizes and prices and to parcels with no building footprint.
+
+\section{What the ordinance's reform does to bills}\label{sec:resplit}
+
+\begin{table}[t]
+  \centering
+  \caption{The re-split, by kind of exemption. With the total and the rate held fixed, only an
+  exemption that depends on the land/building split can change a bill. Net change at the
+  unchanged rate of \LycdMillage{} mills.}
+  \label{tab:fiscal}
+  \input{tables/fiscal_note.tex}
+\end{table}
+
+\LycdCUnchangedParcels{} of \LycdBilledParcels{} bills --- \LycdCUnmovedPct{} --- do not change by
+a cent. Table~\ref{tab:fiscal} shows why: no parcel without an exemption moves, no parcel with
+only a homestead moves, and no parcel with partial relief on its total value moves. The
+\LycdCMoved{} that do move all carry abatement-type relief, and the levy falls by \LycdCLevyAbsM{}
+(\LycdCLevyPct{}), which is the fiscal note the ordinance's drafting notes ask for. The direction
+is the interesting part. The drafters flagged it as unknown --- ``a fiscal note should model
+both directions'' --- and on this construction it is negative: \LycdCDown{} abated bills fall and
+\LycdCUp{} rise, \LycdCDownM{} against \LycdCUpM{}.
+
+\begin{table}[t]
+  \centering
+  \caption{Where the re-split lands. Parcels whose bill moves, by property type; the last
+  column is the median ratio of the new land component to OPA's, over those parcels.}
+  \label{tab:movers}
+  \input{tables/movers_category.tex}
+\end{table}
+
+Why negative? Because OPA's fifth-of-total rule, applied to a new building, produces a land
+value that has nothing to do with the lot. A new house assessed at several times its
+neighbours' gets a land component several times theirs, on an identical lot, and
+\LycdAbatedAtDefaultPct{} of abated parcels sit at exactly the default ratio. Within a market
+area, OPA assesses abated parcels' land at \LycdUniOPAAbatedRatio{} the rate of unabated
+parcels'; the zone-rate allocation assesses it at \LycdUniLYCDAbatedRatio{}, by construction. So
+when the re-split replaces OPA's inflated land component with the zone rate, an abated parcel's
+taxable value --- which under a full abatement is its land component --- falls. The category
+that is nothing but full ten-year abatements (Table~\ref{tab:movers}) sees a median cut of
+\LycdCAbatedMedianAbsPct{}, on a land component now \LycdCAbatedLandRatio{} what OPA had, and it
+accounts for \LycdCAbatedShareOfNet{} of the net change. The \LycdCSfrMoved{} single-family
+homes that move carry partial abatements and move by a median of \LycdCSfrMedianAbs{}, nine in
+ten by less than \LycdCSfrNinetiethAbs{}. Figure~\ref{fig:maps} (right) shows the geography: the
+reductions concentrate where the new construction is, in and around Center City, and the rest
+of the map is white.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{scenario_maps.pdf}
+  \caption{Left: the revaluation (reading A), median change in bill by Census tract, clipped
+  at $\pm$\LycdMapPctClip\%. Right: the re-split (reading C), net change in tract bills in
+  thousands of dollars. Tracts with no billed parcels are omitted.}
+  \label{fig:maps}
+\end{figure}
+
+This is the finding to carry into the fiscal note. It is not that abatements get bigger. It is
+that OPA has been assessing abated parcels' land at nearly double the going rate for their
+block, because the rule of thumb scales land with the building, and a land standard that stops
+that will --- on this construction --- lower those bills. Whether the zone rate is the
+\emph{right} land value for a lot that was recently bought and built on is a fair question, and
+Section~\ref{sec:standards} returns to it. But the current premium is not evidence about those
+lots. It is arithmetic.
+
+\section{What a revaluation would do instead}\label{sec:reval}
+
+The revaluation readings are worth reporting because they are what a reader who hears ``LYCD
+land values'' is likely to imagine, and because the contrast is sharp.
+
+\begin{table}[t]
+  \centering
+  \caption{The revaluation (reading A), by property type. Land re-valued by the zone-rate
+  allocation, OPA's building value kept, rate rolled back from \LycdMillage{} to
+  \LycdAMillage{} mills to hold the levy.}
+  \label{tab:reval}
+  \input{tables/revaluation_category.tex}
+\end{table}
+
+Adding the zone-rate land value to OPA's building value raises the taxable base enough that the
+rate can fall \LycdAMillageCutAbsPct{}, to \LycdAMillage{} mills, and still raise the same
+\LycdLevyB{}. At that rate \LycdADownTenPct{} of bills fall by more than ten percent and
+\LycdAUpTenPct{} rise by more than ten percent; the median single-family bill falls
+\LycdASfrMedianAbsPct{} (Table~\ref{tab:reval}). Left unrolled (reading B), the levy would rise
+\LycdBLevyRisePct{} to \LycdBLevyB{}. Stratified by neighbourhood income and racial composition,
+the revaluation is close to flat --- between \LycdAEquityQOneWin{} and \LycdAEquityQFiveWin{} of
+parcels pay less in every income quintile, with overlapping intervals across racial-composition
+bands (Table~\ref{tab:equity}) --- with one exception: in the lowest decile of property value
+only \LycdAEquityDOneWin{} pay less and the median bill rises \LycdAEquityDOneMedian{}. That
+decile is where the vacant lots are.
+
+\begin{table}[t]
+  \centering
+  \caption{The revaluation (reading A) by block-group income quintile and racial composition.
+  Winners are parcels whose bill falls; intervals are bootstrap 95\% bands.} % noqa: hardcode
+  \label{tab:equity}
+  \input{tables/equity.tex}
+\end{table}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{scenario_compare.pdf}
+  \caption{Distribution of the change in the annual bill under the two readings, log scale,
+  clipped at $\pm$\LycdScenarioHistClip\%. The revaluation moves everything; the re-split
+  leaves \LycdCUnmovedPct{} of bills at zero.}
+  \label{fig:compare}
+\end{figure}
+
+Two facts keep this from being a headline. First, the money moving toward vacant land is the
+method's best-documented error, not a finding. Vacant lots' bills rise by a median
+\LycdAVacantMedianPct{} and account for \LycdAVacantShareOfShift{} of all the dollars that
+increase, and the sales test in Section~\ref{sec:standards} shows the allocation values bare
+land at \LycdSalesLYCDAgg{} its sale price in aggregate. Roughly, the revaluation moves
+\LycdAVacantNetM{} onto vacant land, and the sales evidence says something like half of that is
+a mistake. Second, the revaluation breaks the identity the ordinance is built on. Adding a new
+land value to an old building value means land plus building exceeds the parcel's own
+assessment on \LycdAOvershootParcels{} of \LycdAOvershootDenom{} improved parcels
+(\LycdAOvershootPct{}), by \LycdAOvershootB{} in aggregate. Under Section~3(c) that is not a
+permitted assessment. The revaluation is a useful model of a land-tax \emph{distribution}; it is
+not a model of this ordinance, and it should not be read as one.
+
+\section{The zone-rate allocation against the ordinance's standards}\label{sec:standards}
+
+The ordinance sets two standards for the land component and requires an annual report against
+both. The report OPA would have to publish in its first year, applied to the two candidate land
+surfaces, would say the following.
+
+\subsection{Section 3(e): the prohibited practice}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.9\linewidth]{default_ratio.pdf}
+  \caption{Land as a share of total assessed value, improved parcels, log scale, clipped at
+  \LycdRatioHistClip{}. OPA's roll piles up at \LycdDefaultRatioOpaMode{}; the zone-rate
+  allocation, re-split inside the same totals, spreads.}
+  \label{fig:defaultratio}
+\end{figure}
+
+Figure~\ref{fig:defaultratio} is the practice the ordinance prohibits, seen directly.
+\LycdDefaultRatioOpaPct{} of improved parcels sit at the default ratio in OPA's roll;
+\LycdDefaultRatioLycdPct{} do after the re-split. The zone-rate allocation is also a fixed
+percentage --- but of a market-area rate, not of the parcel's own value, and the difference is
+exactly what makes the next test come out differently.
+
+\subsection{Section 3(b), second sentence: uniformity across improvements}
+
+\begin{table}[t]
+  \centering
+  \caption{The ordinance's uniformity tests within OPA's L3 market areas. Rows 1 and 2 are the
+  median, over zones, of the ratio of median land \$/sqft between the two groups; row 3 is the
+  median Spearman correlation over zone-and-lot-size-quartile cells with at least thirty
+  parcels. ``LYCD, raw'' is the allocation as the method publishes it; ``LYCD, re-split'' is
+  what the ordinance would certify, with each parcel's land capped at its own total.}
+  \label{tab:uniformity}
+  \input{tables/uniformity.tex}
+\end{table}
+
+Table~\ref{tab:uniformity} is the center of this report. The ordinance says the land
+component ``shall not vary among similarly situated parcels on the basis of the presence,
+absence, condition, or value of improvements.'' Both surfaces fail that sentence, and they fail
+different halves of it.
+
+OPA fails on \emph{value}. Among improved parcels in the same market area and the same
+lot-size quartile --- as close to ``similarly situated'' as this data can get --- the rank
+correlation between OPA's land component and the value of the building on it is
+\LycdUniOPABuildingCorr{}, across \LycdUniCells{} such cells. That is not a strong association;
+it is a function. Land equals a fifth of total, total equals land plus building, so land equals
+a quarter of the building, and a more valuable house on the same size lot on the same block gets
+a more valuable lot. It is also, as the previous section showed, why abated parcels' land runs
+\LycdUniOPAAbatedRatio{} their neighbours'. The zone-rate allocation cuts the correlation to
+\LycdUniLYCDBuildingCorr{} and the abatement premium to \LycdUniLYCDAbatedRatio{}.
+
+The raw allocation fails on \emph{presence}. Its vacant multiplier is \LycdLycdKVacant{} and its
+improved multiplier is \LycdLycdKImproved{}, so within every one of
+\LycdUniLYCDVacantImprovedZones{} market areas a vacant lot is assigned \LycdUniLYCDVacantImprovedRatio{}
+the land rate of the improved lot beside it (Figure~\ref{fig:uniformity}). That is variation on
+the basis of the absence of improvements, in the exact words of the standard, and OPA does not
+have it: its vacant and improved land rates agree at the zone median
+(\LycdUniOPAVacantImprovedRatio{}).
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{uniformity.pdf}
+  \caption{Land value per square foot for vacant and improved parcels, all L3 market areas
+  pooled, log scale, top percentile trimmed. OPA's two distributions sit on top of each other;
+  the raw allocation's do not, because its vacant leg uses a multiplier of \LycdLycdKVacant{}
+  where its improved leg uses \LycdLycdKImproved{}.}
+  \label{fig:uniformity}
+\end{figure}
+
+But the re-split does not publish the raw allocation. It caps each parcel's land at its own
+total, and a vacant parcel's total \emph{is} its land, so under the ordinance's reform every
+vacant lot keeps OPA's own vacant value. The certified surface therefore inherits OPA's
+vacant--improved agreement (\LycdUniResplitVacantImprovedRatio{}) and the allocation's
+building-independence (\LycdUniResplitBuildingCorr{}, \LycdUniResplitAbatedRatio{} on abated
+lots). On the uniformity sentence, the re-split is the best of the three columns. That is a
+real result, and it is the strongest case for the minimal change.
+
+\subsection{Section 3(b), first sentence, and Section 4(b): accuracy}
+
+\begin{table}[t]
+  \centering
+  \caption{Assessed land value divided by sale price, vacant-land sales since 2023, both
+  surfaces. A ratio of 1.00 is right. The IAAO standard for the coefficient of dispersion % noqa: hardcode
+  is \LycdIaaoCod{}.}
+  \label{tab:sales}
+  {\small\input{tables/vacant_ratio.tex}}
+\end{table}
+
+The first sentence of the standard is that the land component ``shall closely approximate the
+market value of the land as if vacant,'' and Section~4(b)(.1) names the test: compare it to
+sales of vacant land. Table~\ref{tab:sales} and Figure~\ref{fig:sales} apply that test to both
+surfaces on \LycdSalesN{} bare-lot sales. Neither passes. OPA assesses bare land at
+\LycdSalesOPAAgg{} its sale price in aggregate (median \LycdSalesOPAMedian{}); the raw
+allocation, at \LycdSalesLYCDAgg{} (median \LycdSalesLYCDMedian{}). Both are dispersed far beyond
+the IAAO limit --- coefficients of dispersion of \LycdSalesOPACod{} and \LycdSalesLYCDCod{}
+against a standard of \LycdIaaoCod{} --- and both are regressive, with price-related
+differentials of \LycdSalesOPAPrd{} and \LycdSalesLYCDPrd{} where uniformity wants about one:
+cheap lots over-assessed, expensive lots under-assessed, on both surfaces.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{sales_test.pdf}
+  \caption{The Section~4(b)(.1) test. Left: aggregate assessed-to-sale ratio, where the dashed
+  line is correct. Right: coefficient of dispersion, where the dashed line is the IAAO limit.
+  Three sample cuts of the same sales, narrowing from the left.}
+  \label{fig:sales}
+\end{figure}
+
+For the minimal change this has a specific meaning. Because the re-split keeps OPA's vacant
+values, the certified surface's vacant-land accuracy is OPA's: \LycdSalesOPAAgg{}. The zone-rate
+allocation cannot improve it, and the annual accuracy report would say so. What the sales
+\emph{can} do is calibrate the method. The allocation's vacant leg is linear in its multiplier,
+so a surface running \LycdSalesLYCDAgg{} in aggregate is consistent with a multiplier of
+\LycdSalesImpliedKAgg{} rather than \LycdLycdKVacant{} (\LycdSalesImpliedKMedian{} on the
+median). That number is worth more than it looks. It is the first sales-based estimate of what
+fraction of a market area's total-value rate is land, and it says the answer is a good deal
+more than a fifth --- which is also the first piece of evidence about whether the improved
+multiplier of \LycdLycdKImproved{} is right. It is not proof: a vacant lot and a built one in the
+same zone are not the same lot, and the dispersion behind that aggregate is large. But it is
+what the ordinance's Section~4(d) asks for when direct evidence is thin --- an evaluation with
+its basis stated --- and it is the natural first entry in OPA's first land value accuracy report.
+
+\subsection{Section 3(c): the identity}
+
+The re-split satisfies Section~3(c) by construction; land plus building equals OPA's total on
+every parcel, to the cent, and the modeling asserts it. The revaluation does not
+(Section~\ref{sec:reval}). Any proposal that ``adds'' a land value to OPA's building is outside
+the ordinance whatever land value it uses.
+
+\section{What the ordinance should say}\label{sec:language}
+
+As drafted, Section~3(e) prohibits the minimal change: a fixed percentage of a zone's
+total-value rate is a fixed percentage of total value, one step removed, and the
+interim-certification carve-out would have OPA certify in writing every year that the evidence
+for something better does not exist. If Council wants the zone-rate allocation available as a
+first step rather than as an admission, the prohibition should target what actually produces
+the defect in Table~\ref{tab:uniformity} --- applying the fraction to the parcel's \emph{own}
+total --- and permit the market-area form explicitly. Suggested language, for the Law
+Department's judgment:
+
+\begin{quote}
+\small
+(e) \emph{Prohibited practice.} The land component of a parcel shall not be determined by the
+application of a fixed percentage or ratio to that parcel's own total assessed value. Nothing
+in this paragraph prohibits a land component derived by applying a uniform percentage to a
+rate per square foot of land estimated for a geographic market area, multiplied by the
+parcel's land area, provided that the percentage, the rate, and the boundaries of each
+market area are published under subsection (5); that the land components so derived are
+evaluated under subsection (4); and that, where the rate is estimated from the total assessed
+or sale values of improved parcels rather than from sales evidence of land value, the Chief
+Assessment Officer so states in the report required by subsection (4), together with a plan
+and timeline for estimating the rate from such evidence.
+\end{quote}
+
+Three features of that language are deliberate. It keeps the prohibition on the parcel-level
+practice, which is the one that makes land a function of the building. It keeps the
+vacant-versus-improved test in force, so the raw allocation's \LycdLycdKVacant{}-to-\LycdLycdKImproved{}
+cliff cannot be certified as it stands --- the re-split avoids it only by keeping OPA's vacant
+values, and a method that applied its own rate to vacant lots would have to reconcile it.
+And it moves the interim certification from the \emph{method} to the \emph{rate source}, which is
+where the actual gap is: a market-area rate derived from total values is an allocation, and the
+ordinance's list of recognized methods is right that an allocation is where you start, not
+where you finish.
 
 \section{Caveats}
-% Sample sizes, confidence intervals, robustness, what would change the conclusion.
 
-\section{Policy implication}
-% Tie the evidence back to the decision.
+\begin{enumerate}
+\item \textbf{``Similarly situated'' is operationalized as ``same L3 market area,'' and in the
+  sharpest test, same lot-size quartile.} The ordinance's own list adds dimensions, frontage,
+  topography and zoning. Adding them would make the comparisons tighter, and could only lower the
+  measured correlations; it cannot raise OPA's above \LycdUniOPABuildingCorr{}.
+\item \textbf{The exemption rule reproduces \LycdReconMatchPct{} of today's bills, not all of them.} The
+  remainder are parcels where OPA's homestead flag and the relief actually applied disagree. They
+  are excluded from the re-split's change count by differencing against the rule itself; they
+  are not excluded from the roll.
+\item \textbf{The sales test's dispersion figures are inflated.} Its sales scrutiny is crude
+  --- a price floor, plausibility bounds, no building record --- and vacant sale prices carry
+  transaction noise that a ratio study charges to the surface. The companion study in the
+  LVTShift repository estimates that noise alone would produce a coefficient of dispersion in
+  the mid-twenties to mid-thirties against a perfect assessment. The \emph{level} findings
+  (\LycdSalesOPAAgg{} and \LycdSalesLYCDAgg{}) are robust to both; the dispersion findings are
+  smaller than shown, not absent.
+\item \textbf{The direction of the fiscal note depends on the zone rate being nearer the truth
+  than OPA's abated-parcel land values.} The case for that is that \LycdAbatedAtDefaultPct{} of
+  those values are the default ratio applied to a new building. The case against is that a
+  market-area median is dominated by older stock and may understate land where new construction
+  is concentrated. The re-split lowers the levy by \LycdCLevyAbsM{}; a land model that resolved that question
+  could move it either way, and the ordinance's own accuracy report is the instrument for
+  resolving it.
+\item \textbf{One vintage.} Everything here is the TY\LycdTaxYear{} certified roll and sales
+  through mid-2026. The ordinance takes effect for TY2028.
+\end{enumerate}
+
+\section{What the minimal change buys, and what it does not}
+
+Keeping a fixed fraction and applying it to a market-area rate instead of to each parcel's
+own total is a small change to OPA's practice, and this report finds it does three things. It
+removes the building from the land value: the correlation between the two falls from
+\LycdUniOPABuildingCorr{} to \LycdUniResplitBuildingCorr{}, and the \LycdDefaultRatioOpaPct{} of
+parcels at the default ratio become \LycdDefaultRatioLycdPct{}. It corrects a specific
+distortion the ordinance's findings name --- abated parcels' land assessed at
+\LycdUniOPAAbatedRatio{} their neighbours' --- and the correction is worth \LycdCLevyAbsM{} a year,
+in the abated parcels' favour. And it does both without moving \LycdCUnmovedPct{} of the
+city's bills or any parcel's total, which is the property that makes it adoptable in one
+reassessment cycle rather than several.
+
+What it does not do is make land values accurate, and the ordinance would find that out in
+year one. On the one class where a land value can be checked against a sale price, the
+certified surface would carry OPA's \LycdSalesOPAAgg{}, and nothing in the zone-rate
+construction can move it. The sales that show that also show the way forward: a market-area
+rate estimated from vacant and teardown sales rather than from total values, published in the
+same schedule form --- rate, times area, times listed adjustments --- so that an appeal can
+contest a number rather than a model. That is the second analysis this one points to, and it is
+the one the ordinance, amended as above, would require OPA to produce a plan for.
+
+Philadelphia has assessed land for as long as it has assessed property and has never once
+tested whether the land numbers mean anything. The minimal change makes them mean
+\emph{something} --- a lot's location and size --- at almost no cost to anyone's bill. The
+ordinance's accuracy report is what will make them mean the right thing.
 
 \paragraph{Reproducibility.} Every number, table, and figure in this report is generated by
-\texttt{paper/scripts/generate\_paper\_assets.py} from the analysis outputs; rebuild with a
-single command.
+one script in the LVTShift repository, \path{paper/scripts/generate_paper_assets.py}, from
+two tracked artifacts: the per-parcel export of
+\path{cities/philadelphia/model_lycd_reassessment.ipynb} and the table written by
+\path{scripts/vacant_land_ratio_study.py}. Rebuild with a single command.
 
 \end{document}

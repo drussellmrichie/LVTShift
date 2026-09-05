@@ -249,6 +249,11 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 - `docs/LYCD_LAND_MODEL_ROADMAP.md` — what LYCD is (the allocation method), its defects in order
   of consequence, the tunings possible inside the method, and what an assessor-grade land model
   would look like; also documents the LYCD-land reassessment notebook built alongside it
+- `analysis/lycd_reassessment/philadelphia/paper/` — PPI report on what a zone-rate land
+  allocation does to bills under the draft land-assessment ordinance (re-split inside OPA's
+  total vs. revaluation), and how both land surfaces measure against the ordinance's own
+  uniformity and accuracy tests. Generator-driven: `generate_paper_assets.py` is the only
+  source of numbers; `Report.tex` carries no literals
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 - `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
   a prior audit; a new pass writes a new dated file so the two can be compared. The single-tax

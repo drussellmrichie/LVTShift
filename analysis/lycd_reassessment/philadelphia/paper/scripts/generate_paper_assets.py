@@ -127,6 +127,8 @@ def scenario_c(df, H):
     H.add("CUp", int((b["alloc_tax_change"] > 0.01).sum()), num)
     H.add("CDown", int((b["alloc_tax_change"] < -0.01).sum()), num)
     H.add("CLevyM", b["alloc_tax_change"].sum() / 1e6, lambda x: f"-${abs(x):,.1f}M")
+    # Unsigned variants for prose where the verb carries the direction ("falls by $11.6M").
+    H.add("CLevyAbsM", abs(b["alloc_tax_change"].sum()) / 1e6, lambda x: f"${x:,.1f}M")
     H.add("CLevyPct", 100 * b["alloc_tax_change"].sum() / df["current_tax"].sum(),
           lambda x: f"{x:.2f}%")
     H.add("CMedianPct", mv["alloc_tax_change_pct"].median(), lambda x: f"{x:.1f}%")
@@ -134,6 +136,7 @@ def scenario_c(df, H):
     ab = mv[mv["abated"] == 1]
     H.add("CAbatedMoved", len(ab), num)
     H.add("CAbatedMedianPct", ab["alloc_tax_change_pct"].median(), lambda x: f"{x:.1f}%")
+    H.add("CAbatedMedianAbsPct", abs(ab["alloc_tax_change_pct"].median()), lambda x: f"{x:.1f}%")
     H.add("CAbatedNetM", ab["alloc_tax_change"].sum() / 1e6, lambda x: f"-${abs(x):,.1f}M")
     lr = (ab["lycd_land_value"] / ab["opa_gross_land"].replace(0, np.nan)).median()
     H.add("CAbatedLandRatio", lr, ratio)
@@ -141,6 +144,26 @@ def scenario_c(df, H):
     # Everything that is NOT abatement-type relief is bit-for-bit unchanged -- the claim the
     # notebook asserts on every run.
     H.add("CUnchangedParcels", int((~moved).sum()), num)
+
+    # The exemption rule's reconstruction of today's bill is recoverable from the export:
+    # alloc_new_tax is the rule on the new land, alloc_tax_change is (rule on new land) minus
+    # (rule on OPA's land), so their difference is the rule on OPA's land. Where that differs
+    # from the recorded bill, the rule cannot reproduce today's exemption for that parcel.
+    recon = df["alloc_new_tax"] - df["alloc_tax_change"]
+    mismatch = (recon - df["current_tax"]).abs() > 0.02      # $1 of value at ~14 mills
+    H.add("ReconMatchPct", 100 * (1 - mismatch.mean()), pct)
+    H.add("ReconMismatchParcels", int(mismatch.sum()), num)
+
+    up, down = mv[mv["alloc_tax_change"] > 0], mv[mv["alloc_tax_change"] < 0]
+    H.add("CUpM", up["alloc_tax_change"].sum() / 1e6, lambda x: f"${x:,.1f}M")
+    H.add("CDownM", down["alloc_tax_change"].sum() / 1e6, lambda x: f"-${abs(x):,.1f}M")
+    H.add("CAbatedShareOfNet",
+          100 * mv.loc[mv["property_category"] == "Abated / Construction Exemption",
+                       "alloc_tax_change"].sum() / mv["alloc_tax_change"].sum(), pct)
+    sfr = mv[mv["property_category"] == "Single Family Residential"]
+    H.add("CSfrMoved", len(sfr), num)
+    H.add("CSfrMedianAbs", sfr["alloc_tax_change"].abs().median(), money)
+    H.add("CSfrNinetiethAbs", sfr["alloc_tax_change"].abs().quantile(0.9), money)
     return b, moved
 
 
@@ -150,21 +173,24 @@ def scenario_a(df, H):
     H.add("AMillage", float(df["land_millage"].iloc[0]), lambda x: f"{x:.4f}")
     H.add("AMillageCutPct", 100 * (float(df["land_millage"].iloc[0]) / TY.combined_mills - 1),
           lambda x: f"{x:.1f}%")
+    H.add("AMillageCutAbsPct", abs(100 * (float(df["land_millage"].iloc[0]) / TY.combined_mills - 1)),
+          lambda x: f"{x:.1f}%")
     H.add("ADownTenPct", 100 * (b["tax_change_pct"] < -10).mean(), pct)
     H.add("AUpTenPct", 100 * (b["tax_change_pct"] > 10).mean(), pct)
     H.add("AMedianPct", b["tax_change_pct"].median(), lambda x: f"{x:.1f}%")
 
     vac = b[b["property_category"] == "Vacant Land"]
-    H.add("AVacantMedianPct", vac["tax_change_pct"].median(), lambda x: f"+{x:,.0f}%")
+    H.add("AVacantMedianPct", vac["tax_change_pct"].median(), lambda x: f"{x:,.0f}%")
     H.add("AVacantNetM", vac["tax_change"].sum() / 1e6, usd_m)
     H.add("AVacantShareOfShift",
           100 * vac["tax_change"].clip(lower=0).sum() / b["tax_change"].clip(lower=0).sum(), pct)
     sfr = b[b["property_category"] == "Single Family Residential"]
     H.add("ASfrMedianPct", sfr["tax_change_pct"].median(), lambda x: f"{x:.1f}%")
+    H.add("ASfrMedianAbsPct", abs(sfr["tax_change_pct"].median()), lambda x: f"{x:.1f}%")
 
     # Scenario B: the same base with the rate NOT rolled back.
     lev_b = b["norollback_new_tax"].sum()
-    H.add("BLevyRisePct", 100 * (lev_b / b["current_tax"].sum() - 1), lambda x: f"+{x:.1f}%")
+    H.add("BLevyRisePct", 100 * (lev_b / b["current_tax"].sum() - 1), lambda x: f"{x:.1f}%")
     H.add("BLevyB", lev_b / 1e9, usd_b)
 
     # The Sec. 3(c) identity this reading breaks, and by how much. Measured on GROSS values
@@ -198,14 +224,19 @@ def uniformity_tests(df, H):
     """
     d = df[(df["dor_area_sqft"] > 0) & (df["gma3"].notna()) & (df["institutional_exempt"] == 0)].copy()
     d["improved"] = d["opa_gross_building"] > 0
-    d["psf_opa"] = land_psf(d, "opa_gross_land")
-    d["psf_lycd"] = land_psf(d, "lycd_land_value")
+    # Three surfaces, not two. The raw LYCD column is what the method publishes on its own;
+    # `alloc_land` is what the ordinance's re-split would actually certify, and the two differ
+    # exactly where it matters for Sec. 3(b): a vacant parcel's re-split land is capped at its
+    # own total, i.e. OPA's own vacant value, so the raw method's vacant leg never reaches the roll.
+    SURFACES = (("OPA", "opa_gross_land"), ("LYCD", "lycd_land_value"), ("Resplit", "alloc_land"))
+    for name, col in SURFACES:
+        d[f"psf_{name}"] = land_psf(d, col)
 
     rows = []
     # (1) vacant vs improved land rate, within zone. The ordinance names this exact contrast.
-    for name, col in (("OPA", "psf_opa"), ("LYCD", "psf_lycd")):
-        z = d.groupby("gma3").filter(lambda g: g["improved"].nunique() == 2 and len(g) >= 30)
-        med = z.groupby(["gma3", "improved"])[col].median().unstack()
+    z = d.groupby("gma3").filter(lambda g: g["improved"].nunique() == 2 and len(g) >= 30)
+    for name, _ in SURFACES:
+        med = z.groupby(["gma3", "improved"])[f"psf_{name}"].median().unstack()
         r = (med[False] / med[True]).replace([np.inf, -np.inf], np.nan).dropna()
         rows.append({"surface": name, "test": "Vacant vs improved land \\$/sqft, same zone",
                      "n": len(r), "value": r.median()})
@@ -214,9 +245,9 @@ def uniformity_tests(df, H):
 
     # (2) abated vs non-abated land rate, within zone (Sec. 4(c) names abatement status).
     da = d[d["improved"]]
-    for name, col in (("OPA", "psf_opa"), ("LYCD", "psf_lycd")):
-        z = da.groupby("gma3").filter(lambda g: g["abated"].nunique() == 2 and (g["abated"] == 1).sum() >= 10)
-        med = z.groupby(["gma3", "abated"])[col].median().unstack()
+    z = da.groupby("gma3").filter(lambda g: g["abated"].nunique() == 2 and (g["abated"] == 1).sum() >= 10)
+    for name, _ in SURFACES:
+        med = z.groupby(["gma3", "abated"])[f"psf_{name}"].median().unstack()
         r = (med[1] / med[0]).replace([np.inf, -np.inf], np.nan).dropna()
         rows.append({"surface": name, "test": "Abated vs unabated land \\$/sqft, same zone",
                      "n": len(r), "value": r.median()})
@@ -229,7 +260,7 @@ def uniformity_tests(df, H):
     da["area_band"] = da.groupby("gma3")["dor_area_sqft"].transform(
         lambda s: pd.qcut(s, 4, labels=False, duplicates="drop"))
     cells = da.groupby(["gma3", "area_band"]).filter(lambda g: len(g) >= 30)
-    for name, col in (("OPA", "opa_gross_land"), ("LYCD", "lycd_land_value")):
+    for name, col in SURFACES:
         rho = cells.groupby(["gma3", "area_band"]).apply(
             lambda g: g[col].corr(g["opa_gross_building"], method="spearman"),
             include_groups=False).dropna()
@@ -240,13 +271,15 @@ def uniformity_tests(df, H):
     H.add("UniCells", int(cells.groupby(["gma3", "area_band"]).ngroups), num)
 
     tbl = pd.DataFrame(rows)
+    pick = lambda s: tbl[tbl.surface == s]  # noqa: E731
     out = pd.DataFrame({
-        "Test": tbl[tbl.surface == "OPA"]["test"].values,
-        "Zones": [num(v) for v in tbl[tbl.surface == "OPA"]["n"].values],
-        "OPA": [f"{v:.2f}" for v in tbl[tbl.surface == "OPA"]["value"].values],
-        "LYCD": [f"{v:.2f}" for v in tbl[tbl.surface == "LYCD"]["value"].values],
+        "Test": pick("OPA")["test"].values,
+        "Cells": [num(v) for v in pick("OPA")["n"].values],
+        "OPA": [f"{v:.2f}" for v in pick("OPA")["value"].values],
+        "LYCD, raw": [f"{v:.2f}" for v in pick("LYCD")["value"].values],
+        "LYCD, re-split": [f"{v:.2f}" for v in pick("Resplit")["value"].values],
     })
-    save_table(TABLES / "uniformity.tex", out, col_format="X r r r", escape=False)
+    save_table(TABLES / "uniformity.tex", out, col_format="X r r r r", escape=False)
     return d
 
 
@@ -257,6 +290,12 @@ def default_ratio_collapse(df, H):
     d = df[(df["opa_gross_building"] > 0) & (df["market_value"] > 0)]
     r_opa = (d["opa_gross_land"] / d["market_value"]).round(4)
     r_lycd = (d["alloc_land"] / d["market_value"]).round(4)
+    # Abated parcels specifically: if most of them also sit at 0.20, the premium OPA gives
+    # their land over their neighbours' is the 80/20 rule applied to an expensive new
+    # building, not evidence about the lot.
+    ab = d[d["abated"] == 1]
+    H.add("AbatedAtDefaultPct",
+          100 * (ab["opa_gross_land"] / ab["market_value"]).round(4).between(0.1995, 0.2005).mean(), pct)
     at20_opa = 100 * r_opa.between(0.1995, 0.2005).mean()
     at20_lycd = 100 * r_lycd.between(0.1995, 0.2005).mean()
     H.add("DefaultRatioOpaPct", at20_opa, pct)
@@ -285,18 +324,21 @@ def sales_test(rat, H):
     H.add("LycdKVacant", LYCD_K_VACANT, lambda x: f"{x:.2f}")
     H.add("LycdKImproved", LYCD_K_IMPROVED, lambda x: f"{x:.2f}")
 
-    out = rat.rename(columns={"sample": "Sample", "n": "Sales"}).copy()
-    out["Sample"] = (out["Sample"].str.replace(">=", "$\\geq$", regex=False)
-                     .str.replace("$20k", "\\$20k", regex=False))
-    out["Sales"] = out["Sales"].map(num)
-    for c in ["OPA median", "LYCD median"]:
-        out[c] = out[c].map(lambda x: f"{x:.2f}")
-    for c in ["OPA COD", "LYCD COD"]:
-        out[c] = out[c].map(lambda x: f"{x:.0f}")
-    for c in ["OPA aggregate", "LYCD aggregate"]:
-        out[c] = out[c].map(lambda x: f"{x:.2f}")
-    out = out[["Sample", "Sales", "OPA median", "OPA COD", "OPA aggregate",
-               "LYCD median", "LYCD COD", "LYCD aggregate"]]
+    # Eight columns is the limit of what the text width takes; short labels and headers keep the
+    # X column from being starved into a one-word-per-line ribbon (it was, on first render).
+    labels = {"all vacant-category sales": "All vacant sales",
+              "genuinely bare land": "Bare land",
+              "bare land, sale >= $20k": "Bare land, sale $\\geq$ \\$20k"}
+    out = pd.DataFrame({
+        "Sample": rat["sample"].map(lambda s: labels.get(s, latex_escape(s))),
+        "n": rat["n"].map(num),
+        "OPA med.": rat["OPA median"].map(lambda x: f"{x:.2f}"),
+        "OPA COD": rat["OPA COD"].map(lambda x: f"{x:.0f}"),
+        "OPA agg.": rat["OPA aggregate"].map(lambda x: f"{x:.2f}"),
+        "LYCD med.": rat["LYCD median"].map(lambda x: f"{x:.2f}"),
+        "LYCD COD": rat["LYCD COD"].map(lambda x: f"{x:.0f}"),
+        "LYCD agg.": rat["LYCD aggregate"].map(lambda x: f"{x:.2f}"),
+    })
     save_table(TABLES / "vacant_ratio.tex", out, col_format="X r r r r r r r", escape=False)
 
 
@@ -404,7 +446,8 @@ def table_equity(b, H):
             continue
         grp = t.columns[0]
         frames.append(pd.DataFrame({
-            "Stratum": [f"{label}: {v}" for v in t[grp]],
+            # Minority bands read "0-10%": the % must be escaped or LaTeX comments out the row.
+            "Stratum": [f"{label}: {latex_escape(v)}" for v in t[grp]],
             "Parcels": t["n"].map(num),
             "Pay less": t["pct_winners"].map(lambda x: f"{x:.1f}\\%"),
             "95\\% CI": [f"{lo:.1f}--{hi:.1f}" for lo, hi in
@@ -419,7 +462,7 @@ def table_equity(b, H):
     H.add("AEquityQFiveWin", inc["pct_winners"].iloc[-1], pct)
     val = eq["by_value_decile"]
     H.add("AEquityDOneWin", val["pct_winners"].iloc[0], pct)
-    H.add("AEquityDOneMedian", val["median_change_pct"].iloc[0], lambda x: f"{x:+,.1f}%")
+    H.add("AEquityDOneMedian", val["median_change_pct"].iloc[0], lambda x: f"{x:,.1f}%")
     H.add("AEquityDTenWin", val["pct_winners"].iloc[-1], pct)
     return eq
 
@@ -494,8 +537,8 @@ def fig_maps(b):
 def fig_uniformity(d):
     """Sec. 3(b)'s own contrast: does the land rate depend on what is built on the lot?"""
     fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.4), sharey=True)
-    for ax, col, title in ((axes[0], "psf_opa", "OPA land values"),
-                           (axes[1], "psf_lycd", "LYCD land values")):
+    for ax, col, title in ((axes[0], "psf_OPA", "OPA land values"),
+                           (axes[1], "psf_LYCD", "LYCD land values, raw")):
         parts = [d.loc[~d["improved"], col].dropna(), d.loc[d["improved"], col].dropna()]
         parts = [p[(p > 0) & (p < np.nanpercentile(p, 99))] for p in parts]
         ax.boxplot([np.log10(p) for p in parts], tick_labels=["vacant", "improved"],

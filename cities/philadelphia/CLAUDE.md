@@ -270,6 +270,30 @@ drift from the LVT notebooks by construction:
   the flag is current-vintage. **Its guard is a reconstruction**: OPA's own gross land fed through
   the same rule must reproduce OPA's taxable total per parcel (the floor is 95%; the observed rate
   is printed). That is the number that would move if the rule mis-described the exemptions.
+- **`reallocate_land_within_total`** (2026-09-05, notebook Step 6b) is the *other* reading of
+  "LYCD land, rates unchanged" — the one the draft § 2-305 land-assessment ordinance describes.
+  It holds OPA's **total** fixed instead of OPA's building: `alloc_land = min(new_land, total)`,
+  `alloc_building = total − alloc_land`, statutory rate untouched. The two functions share one
+  private exemption decomposition (`_decompose_exemptions` / `_apply_exemptions` /
+  `_reconstruction_guard`) so they cannot disagree about what a parcel's exemptions *are*, only
+  about what is held fixed. Consequence, asserted in the notebook on every run: with total and
+  rate fixed, the only bills that can move are those whose exemption depends on the split —
+  abatement-type relief (`exemption_kind == 'building_share'`); homestead, partial relief on
+  total value, and vacant parcels are bit-for-bit unchanged. Two things the synthetic tests
+  did not catch and the real cache did: (1) relief that fits inside the building line but is
+  split pro-rata across land and building is a share of *total* value, not an abatement —
+  classify on `exempt_land` net of homestead spill, not on fit alone; (2) read the effect off
+  `.reform_change` (rule on new land minus rule on OPA's land), never against OPA's *recorded*
+  taxable total, or the rule's 0.5% reconstruction residual (parcels whose recorded homestead
+  disagrees with the relief applied) shows up as a tax change on parcels the reform cannot
+  touch. Export columns: `alloc_*`, `exemption_kind`, `norollback_new_tax`, `abated`,
+  `market_value`, `taxable_total`, `dor_area_sqft`, `lycd_zone_psf`, `gma3` — the last five
+  exist so the report generator can run the ordinance's uniformity tests without the cache.
+
+The PPI report on both readings and the ordinance's own tests lives in
+`analysis/lycd_reassessment/philadelphia/paper/` (generator-driven; `Report.tex` carries no
+literals). Its mechanism-level findings are summarized in `docs/LYCD_LAND_MODEL_ROADMAP.md`
+under "Against the draft ordinance".
 
 Two things to keep straight when reading its output. The LVT notebooks do *not* re-apply the
 homestead to LYCD land (their `model_building` is post-exemption, their land is gross), so their

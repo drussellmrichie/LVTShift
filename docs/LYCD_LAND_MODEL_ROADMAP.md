@@ -216,12 +216,42 @@ rule documented in `cities/philadelphia/CLAUDE.md`, and then decomposes a stacke
 reassess-then-split-rate shift into its two components. Its export is
 `analysis/data/philadelphia_lycd_reassessment_ty<YEAR>.csv`.
 
+The same notebook's Step 6b (2026-09-05) models the *other* reading of "LYCD land, rates
+unchanged": the one a draft ordinance amending Phila. Code § 2-305 actually describes, where the
+land component is re-split *inside* OPA's unchanged total (building = total − land) and the
+statutory rate is untouched, so only exemptions that depend on the split -- abatements -- can
+move a bill. `lvt.philadelphia.reallocate_land_within_total` is that reform; it shares the
+exemption decomposition with `carry_forward_exemptions` and differs only in what it holds fixed.
+
+## Against the draft ordinance
+
+`analysis/lycd_reassessment/philadelphia/paper/` is the PPI report that puts the two readings
+side by side and runs the ordinance's own § 3(b)/§ 4 tests on OPA's surface, the raw LYCD
+surface, and the re-split surface the ordinance would certify. The mechanism worth carrying
+here, not the numbers (the generator owns those): **neither surface satisfies § 3(b)'s
+uniformity sentence, and they fail different halves of it.** OPA's land is a deterministic
+function of the building (land = 0.20 × total ⇒ land = 0.25 × building, so within-zone rank
+correlation is exactly 1), which is also why abated new construction gets land far above its
+neighbours'. Raw LYCD fails on *presence*: its `k = 1.00` vacant leg over `k = 0.20` improved is
+literally variation on the absence of improvements. The re-split escapes that only because a
+vacant parcel's land is capped at its own total -- i.e. it inherits OPA's vacant value, and with
+it OPA's vacant-land accuracy against sales. The report also drafts § 3(e) language that
+prohibits the parcel-level fixed ratio while permitting the market-area form, with the interim
+certification moved to the *rate source*.
+
 ## Open items
 
 - Lars Doucet's write-up of the method (`openavmkit/valuing land - the simplest viable
   method.pdf`) is image-only and was not machine-readable when this note was written; check
   whether it already specifies any of the Stage A refinements before implementing them.
 - No published artifact yet carries the land-share band the audit asked for (finding 6).
+- **The second analysis: a sales-based base rate in LYCD's schedule form** (requested
+  2026-09-05). Stage B above, built in `philly_open_avmkit` per the repo boundary and consumed
+  here as a per-parcel surface keyed on `parcel_number`. Once it exists,
+  `model_lycd_reassessment.ipynb` takes it as an alternative `new_land_col`, both readings and
+  the ordinance tests re-run, and the report gains a third surface column. The sales-implied
+  vacant multiplier the report derives (1 / LYCD's aggregate vacant ratio) is the first number
+  that analysis should reproduce.
 
 ## Resolved
 
