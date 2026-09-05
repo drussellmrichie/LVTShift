@@ -16,7 +16,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEARS"]
+__all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEARS",
+           "ZeroBuildingSplit", "split_zero_building_parcels",
+           "LycdResult", "compute_lycd_land_values",
+           "ExemptionCarryForward", "carry_forward_exemptions",
+           "compute_residual_building_value",
+           "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES"]
 
 
 @dataclass(frozen=True)
@@ -27,6 +32,7 @@ class TaxYear:
     city_revenue_target: int | None
     target_kind: str      # 'actual' | 'projection' | 'none'
     source: str
+    homestead_exemption: int   # statutory Homestead Exemption for this tax year
 
     @property
     def combined_rate_pct(self) -> float:
@@ -45,7 +51,8 @@ class TaxYear:
         tgt = (f"${self.city_revenue_target:,} ({self.target_kind})"
                if self.city_revenue_target else "no target (forward-looking year)")
         return (f"TY{self.year}: {self.city_rate_pct}% city + {self.school_rate_pct}% school "
-                f"= {self.combined_rate_pct}% ({self.combined_mills} mills) | city target {tgt}")
+                f"= {self.combined_rate_pct}% ({self.combined_mills} mills) | city target {tgt} "
+                f"| homestead ${self.homestead_exemption:,}")
 
 
 _PARAMS: dict[int, TaxYear] = {
@@ -55,6 +62,7 @@ _PARAMS: dict[int, TaxYear] = {
         school_rate_pct=0.7681,
         city_revenue_target=795_796_126,
         target_kind="actual",
+        homestead_exemption=80_000,
         source="FY2024 city-only current-year Real Estate Tax collections.",
     ),
     2026: TaxYear(
@@ -70,6 +78,7 @@ _PARAMS: dict[int, TaxYear] = {
             "'Current' full-year Current Projection ($891,102k). This is a Q3 projection, "
             "not a closed-out actual."
         ),
+        homestead_exemption=100_000,
     ),
     2027: TaxYear(
         year=2027,
@@ -85,6 +94,7 @@ _PARAMS: dict[int, TaxYear] = {
             "target: TY2027 bills are not due until March 2027, so there are no collections "
             "to validate against. Treat TY2027 output as a forward-looking scenario."
         ),
+        homestead_exemption=100_000,
     ),
 }
 
@@ -103,6 +113,111 @@ def tax_year_params(year: int) -> TaxYear:
         ) from None
 
 
+@dataclass(frozen=True)
+class ZeroBuildingSplit:
+    """How the zeroed-building-line cohort divides. See `split_zero_building_parcels`."""
+    category: "pd.Series"
+    abated: "pd.Series"
+    homestead_zeroed: "pd.Series"
+    no_exemption: "pd.Series"
+    homestead_claim_rate: float
+
+    def describe(self) -> str:
+        return (f"zero-building line: {int(self.abated.sum()):,} abated | "
+                f"{int(self.homestead_zeroed.sum()):,} homestead-zeroed "
+                f"({self.homestead_claim_rate:.1%} confirmed by OPA's homestead flag) | "
+                f"{int(self.no_exemption.sum()):,} genuinely $0 improvement")
+
+
+def split_zero_building_parcels(
+    gdf,
+    category,
+    homestead_exemption: float,
+    category_map: dict,
+    *,
+    genuine_vacant_codes=("6", "12", "13"),
+    homestead_claim_floor: float = 0.85,
+) -> ZeroBuildingSplit:
+    """Split parcels whose taxable building line is $0 into their three real populations.
+
+    `taxable_building <= 0` on a non-vacant parcel does not mean "abated". It means the
+    building line nets to zero, which happens three different ways, and treating all of
+    them as abated construction put ~13k modest homesteaded rowhomes in the abated bucket
+    and then revoked their Homestead Exemption under the reform while every other
+    homesteader in the city kept theirs.
+
+    The discriminator is the exempt total. The Homestead Exemption is a flat statutory
+    amount, so it can never explain more than `homestead_exemption` of exempted value:
+
+    - `exempt_total >  homestead_exemption` -> an abatement is present.
+    - `0 < exempt_total <= homestead_exemption` -> ordinary homesteaded property whose
+      building assessment is smaller than the exemption. Restored to its OPA category;
+      it keeps its exemption under the reform, so its $0 building line is correct as-is.
+    - `exempt_total == 0` -> nothing is exempted and the improvement really is worth $0.
+      Left as Override 1 classified it.
+
+    Pass `homestead_exemption` from `tax_year_params(year)`, not a literal: the amount has
+    moved four times ($30K -> $40K -> $45K -> $80K -> $100K) and using the wrong year's cap
+    silently moves parcels across the abated/homestead boundary.
+
+    Parameters
+    ----------
+    gdf : GeoDataFrame or DataFrame
+        Needs `taxable_land`, `taxable_building`, `exempt_land`, `exempt_building` and
+        `category_code`. `homestead_exemption` (per-parcel, from OPA) is optional but
+        enables the guard.
+    category : pd.Series
+        The PROPERTY_CATEGORY series as of Override 1.
+    homestead_exemption : float
+        The tax year's statutory Homestead Exemption.
+    category_map : dict
+        OPA `category_code` -> category name, used to restore homestead-zeroed parcels.
+    homestead_claim_floor : float
+        Minimum share of homestead-zeroed parcels that must actually carry a homestead on
+        OPA's own flag. Below this the split is not describing what it claims to.
+
+    Returns
+    -------
+    ZeroBuildingSplit
+    """
+    import pandas as pd
+
+    def _num(col):
+        return pd.to_numeric(gdf[col], errors="coerce").fillna(0.0)
+
+    codes = gdf["category_code"].astype(str)
+    exempt_total = _num("exempt_land") + _num("exempt_building")
+    zero_building = (
+        (_num("taxable_building") <= 0)
+        & (_num("taxable_land") > 0)
+        & (~codes.isin(set(genuine_vacant_codes)))
+    )
+
+    abated = zero_building & (exempt_total > homestead_exemption)
+    homestead_zeroed = zero_building & (exempt_total > 0) & (exempt_total <= homestead_exemption)
+    no_exemption = zero_building & (exempt_total <= 0)
+
+    out = category.copy()
+    out[abated] = "Abated / Construction Exemption"
+    out[homestead_zeroed] = codes[homestead_zeroed].map(category_map).fillna("Other")
+
+    # The split is exemption arithmetic, so check it against OPA's own homestead flag --
+    # the column that would move if the split were separating the wrong two populations.
+    claim_rate = float("nan")
+    if "homestead_exemption" in gdf.columns and homestead_zeroed.any():
+        hs = pd.to_numeric(gdf["homestead_exemption"], errors="coerce").fillna(0.0)
+        claim_rate = float((hs[homestead_zeroed] > 0).mean())
+        if claim_rate < homestead_claim_floor:
+            raise ValueError(
+                f"Only {claim_rate:.1%} of parcels classified as homestead-zeroed actually "
+                f"carry a Homestead Exemption on OPA's flag (floor {homestead_claim_floor:.0%}). "
+                f"The ${homestead_exemption:,.0f} cap is probably wrong for this tax year -- "
+                "check tax_year_params(year).homestead_exemption against the assessment vintage."
+            )
+
+    return ZeroBuildingSplit(out, abated, homestead_zeroed, no_exemption, claim_rate)
+
+
 def parcel_cache_path(year: int, data_dir: str | Path = "data") -> Path:
     """Path to the year-specific shared parcel cache.
 
@@ -111,3 +226,572 @@ def parcel_cache_path(year: int, data_dir: str | Path = "data") -> Path:
     taxable values against another year's expectations without any visible symptom.
     """
     return Path(data_dir) / f"parcels_ty{year}.gpq"
+
+
+# Philadelphia land area, 134.2 sq mi in sqft. Parcels exclude streets, rights-of-way and
+# water, so a correct lot-area layer sums to *less* than this.
+PHILADELPHIA_LAND_SQFT = 134.2 * 27_878_400
+
+VACANT_CATEGORY_CODES = ("6", "12", "13")
+
+
+@dataclass(frozen=True)
+class LycdResult:
+    """Output of `compute_lycd_land_values`: the frame with LYCD columns, plus diagnostics."""
+    gdf: "pd.DataFrame"
+    diagnostics: dict
+
+    def describe(self) -> str:
+        d = self.diagnostics
+        lines = [
+            "Lot area source: " + ", ".join(f"{k}={v:,}" for k, v in d["area_source_counts"].items()),
+            f"  OPA records overridden by surveyed polygon: {d['n_pin_override']:,}",
+            f"  total lot area = {d['city_area_ratio']:.2f}x the city (expect <1.0)",
+            f"GMA assignment: {d['n_gma_matched']:,} matched ({d['gma_match_rate']:.1%}); "
+            + ", ".join(f"{k}={v:,}" for k, v in d["gma_level_counts"].items()),
+            f"Market-value cap (improved only): {d['n_capped']:,} parcels, "
+            f"${d['land_base_pre_cap']/1e9:.2f}B -> ${d['land_base_post_cap']/1e9:.2f}B "
+            f"({d['cap_removed_share']:.1%} removed)",
+        ]
+        return "\n".join(lines)
+
+
+def compute_lycd_land_values(
+    gdf,
+    gma,
+    pin_areas,
+    *,
+    land_pct_improved=0.20,
+    land_pct_vacant: float = 1.00,
+    min_improved: int = 50,
+    opa_pin_disagree_factor: float = 3.0,
+    vacant_codes=VACANT_CATEGORY_CODES,
+    cap_improved_at_market: bool = True,
+    cap_include_building: bool = False,
+    knn_k: int = 5,
+    city_area_sqft: float = PHILADELPHIA_LAND_SQFT,
+    max_city_area_ratio: float = 1.5,
+    zone_group_col: "str | None" = None,
+) -> LycdResult:
+    """GMA-hierarchical LYCD land values, the construction shared by every Philadelphia notebook.
+
+    "Least You Can Do": a parcel's land value is a uniform local land rate times its lot area,
+    where the rate is the median total value per square foot of *improved* parcels in the
+    parcel's OPA Geographic Market Area, times an allocation share::
+
+        zone_psf        = median(market_value / lot_area) over improved parcels in the zone
+        lycd_land_value = zone_psf x share x lot_area
+        share           = land_pct_improved for improved parcels, land_pct_vacant for vacant ones
+
+    The zone is the finest GMA level with at least `min_improved` improved parcels (L3, else
+    L2, else L1). Parcels outside GMA coverage take the median *rate* ($/sqft) of their
+    `knn_k` nearest GMA-assigned neighbours, applied to their OWN area and land_pct -- a
+    parcel's own size still determines its land value even when its zone rate comes from a
+    spatial smooth (fixed 2026-09; previously imputed the neighbours' dollar land value
+    directly, so a small unmatched parcel next to large ones inherited a land value sized for
+    their lots -- audit 2026-08-08 finding 5). Improved parcels are then clipped at
+    `market_value` (or, with `cap_include_building=True`, at `market_value - taxable_building`
+    -- see that parameter's docstring for why this is off by default). Vacant parcels are not
+    capped, because OPA under-assesses bare land and the clip would erase the
+    development-potential signal.
+
+    Two refinements, off by default, layer on the base construction without changing it for
+    callers that do not use them (`model_lycd_refined_prototype.ipynb` uses both):
+
+    - `zone_group_col`: a column on `gdf` with a per-parcel group label (e.g. "Residential"
+      vs "NonResidential"). When given, zone medians are computed per (group, GMA level) cell
+      instead of pooling every improved parcel type together, so a rowhouse is priced against
+      other residential comps, not whatever commercial parcel happens to share its zone. When
+      `None` (the default), every row shares one implicit group and results are identical to
+      the ungrouped construction -- verified bit-for-bit against `model_lycd.ipynb`'s prior
+      inline version.
+    - `land_pct_improved` as a `pandas.Series` (aligned to `gdf.index`) instead of a scalar:
+      a per-parcel allocation share, e.g. an external land-share estimate for some categories
+      and the flat default for others. The value at vacant rows is ignored -- `land_pct_vacant`
+      always wins there, so callers need not special-case vacant parcels when building the
+      Series.
+
+    Lot area uses ONE convention, true ground square feet, with no spatial join: OPA
+    `total_area` first, then the Mercator-corrected PIN-keyed DOR polygon area, then KNN from
+    parcels already on that convention. A surveyed polygon overrides OPA's record when OPA is
+    more than `opa_pin_disagree_factor` times larger (a handful of impossible OPA records). The
+    method is exactly scale-invariant in lot area, so only *mixed* conventions and *relative*
+    errors move results; the total-area guard catches the mixed-convention failure that once
+    tripled the city's land area.
+
+    Parameters
+    ----------
+    gdf : GeoDataFrame
+        The year-keyed parcel cache. Needs `parcel_number` (zero-padded string), `pin`,
+        `category_code`, `total_area`, `market_value`, `taxable_building` (OPA's raw,
+        pre-abatement-restoration figure -- used only for the market-value cap) and point
+        geometry.
+    gma : DataFrame
+        `parcel_gma_assignment.parquet`: `key` (parcel_number) + `gma1`, `gma2`, `gma3`.
+    pin_areas : DataFrame
+        `parcel_areas_by_pin_current.parquet`: `pin` + `pin_area_sqft`, Mercator-corrected.
+        Do NOT pass the older `parcel_areas_by_pin.parquet` -- those areas are Web Mercator.
+    cap_improved_at_market : bool
+        Apply the improved-parcel market-value clip. Off only for diagnostics.
+    cap_include_building : bool, default False
+        Cap land at `market_value - taxable_building` instead of `market_value` alone, so
+        land plus building cannot exceed the parcel's total value. **Off by default because
+        it is a much bigger change than it looks.** `market_value` is OPA's own
+        `taxable_land + taxable_building` (verified: true for all but 10 of 583,249 TY2026
+        parcels), so `market_value - taxable_building` reduces to essentially OPA's OWN land
+        estimate for any parcel not otherwise capped. Measured on TY2026 (2026-09-05,
+        `cap_improved_at_market=True` baseline): turning this on moves 142,515 parcels,
+        drops 23.9% of single-family parcels to *exactly* OPA's ~0.20 land ratio -- the same
+        default-ratio collapse LYCD exists to break -- and cuts the citywide LYCD/OPA land
+        ratio from 1.54x to 1.32x. It is a real fix for a real problem: 24.4% of taxable
+        non-vacant parcels already have `lycd_land_value + taxable_building > market_value`
+        under the plain cap, $9.31B of double-counted value in aggregate (a materially larger
+        and more consequential finding than the audit's original framing of 19,514 parcels
+        already at land ratio 1.00). But "cap land, hold building fixed" is only one of
+        several ways to resolve that inconsistency, and every one of them changes the model's
+        headline land premium by a similar order of magnitude. Decide deliberately per
+        notebook rather than accepting this as a silent default; see
+        `docs/LYCD_LAND_MODEL_ROADMAP.md` for the finding and the open design question.
+    land_pct_improved : float or pandas.Series
+        See "Two refinements" above.
+    zone_group_col : str, optional
+        See "Two refinements" above.
+
+    Returns
+    -------
+    LycdResult
+        `.gdf` is a copy of `gdf` with `dor_area_sqft`, `area_source`, `gma1/2/3`,
+        `gma_level`, `lycd_zone_psf`, `lycd_land_pct` and `lycd_land_value` added;
+        `.diagnostics` holds the counts the notebooks print and assert on.
+    """
+    import numpy as np
+    import pandas as pd
+    from scipy.spatial import cKDTree
+
+    out = gdf.copy()
+    vacant = set(str(c) for c in vacant_codes)
+
+    # --- Lot area: single convention, no spatial join ---
+    out["pin"] = out["pin"].astype(str).str.strip()
+    pin_lookup = pin_areas.copy()
+    pin_lookup["pin"] = pin_lookup["pin"].astype(str).str.strip()
+    pin_lookup = pin_lookup.drop_duplicates("pin").set_index("pin")["pin_area_sqft"]
+
+    opa_area = pd.to_numeric(out["total_area"], errors="coerce").fillna(0.0)
+    pin_area = out["pin"].map(pin_lookup)
+    has_opa = opa_area > 0
+    has_pin = pin_area.notna() & (pin_area > 0)
+    override = has_opa & has_pin & ((opa_area / pin_area) > opa_pin_disagree_factor)
+
+    area = pd.Series(
+        np.where(override, pin_area, np.where(has_opa, opa_area, np.where(has_pin, pin_area, np.nan))),
+        index=out.index, dtype=float,
+    )
+    area_src = pd.Series(
+        np.where(override, "pin_override",
+                 np.where(has_opa, "opa_total_area", np.where(has_pin, "pin_dor", "knn"))),
+        index=out.index,
+    )
+
+    geom = out.geometry.to_crs("EPSG:3857")
+    if (geom.geom_type != "Point").any():
+        geom = geom.centroid
+    coords = np.column_stack([geom.x.values, geom.y.values])
+
+    def _knn_median(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=float)
+        have = ~np.isnan(values)
+        need = np.isnan(values)
+        if need.sum() == 0:
+            return values
+        tree = cKDTree(coords[have])
+        _, ix = tree.query(coords[need], k=min(knn_k, int(have.sum())), workers=-1)
+        filled = values.copy()
+        filled[need] = np.median(values[have][ix], axis=1)
+        return filled
+
+    n_area_knn = int(area.isna().sum())
+    area = pd.Series(_knn_median(area.values), index=out.index)
+    out["dor_area_sqft"] = area
+    out["area_source"] = area_src
+
+    city_area_ratio = float(area.sum() / city_area_sqft)
+    if city_area_ratio >= max_city_area_ratio:
+        raise ValueError(
+            f"Total lot area is {city_area_ratio:.2f}x the city -- the area layer is inflated. "
+            "Check that PIN areas are Mercator-corrected and that no spatial join has been "
+            "reintroduced."
+        )
+
+    # --- GMA zone labels ---
+    g = gma.copy()
+    g["key"] = g["key"].astype(str).str.zfill(9)
+    g = g.drop_duplicates("key").set_index("key")
+    for lvl in ("gma1", "gma2", "gma3"):
+        out[lvl] = out["parcel_number"].astype(str).str.zfill(9).map(g[lvl])
+    gma_matched = out["gma3"].notna()
+
+    # --- Zone medians of total $/sqft over improved parcels, hierarchical ---
+    cat = out["category_code"].astype(str).str.strip()
+    # category_code may arrive as '1.0' from a float column; normalise like the notebooks do
+    cat = pd.to_numeric(cat, errors="coerce").astype("Int64").astype(str)
+    market = pd.to_numeric(out["market_value"], errors="coerce")
+    has_market = market.notna() & (market > 0)
+    has_area = area.notna() & (area > 0)
+    is_improved = ~cat.isin(vacant) & has_market & has_area
+    is_vacant = cat.isin(vacant) & has_market & has_area
+
+    # Zone-median cell key: (zone_group, gma level) when zone_group_col is given, else just
+    # the gma level -- a constant group prefix on every row partitions identically to no
+    # grouping at all, so this one code path serves both cases.
+    if zone_group_col is not None:
+        if zone_group_col not in out.columns:
+            raise ValueError(f"zone_group_col {zone_group_col!r} is not a column on gdf")
+        group = out[zone_group_col]
+    else:
+        group = pd.Series("_all", index=out.index)
+
+    def _cell_key(level_col: str) -> pd.Series:
+        return pd.Series(list(zip(group, out[level_col])), index=out.index)
+
+    key1, key2, key3 = _cell_key("gma1"), _cell_key("gma2"), _cell_key("gma3")
+
+    total_psf = pd.Series(np.where(is_improved | is_vacant, market / area, np.nan), index=out.index)
+    imp = pd.DataFrame({"psf": total_psf[is_improved], "k1": key1[is_improved],
+                        "k2": key2[is_improved], "k3": key3[is_improved]})
+    l3_n = key3.map(imp.groupby("k3")["psf"].count()).fillna(0)
+    l2_n = key2.map(imp.groupby("k2")["psf"].count()).fillna(0)
+    l3_med = key3.map(imp.groupby("k3")["psf"].median())
+    l2_med = key2.map(imp.groupby("k2")["psf"].median())
+    l1_med = key1.map(imp.groupby("k1")["psf"].median())
+
+    zone_psf = pd.Series(
+        np.where(l3_n >= min_improved, l3_med, np.where(l2_n >= min_improved, l2_med, l1_med)),
+        index=out.index, dtype=float,
+    )
+    out["gma_level"] = np.where(
+        ~gma_matched, "knn",
+        np.where(l3_n >= min_improved, "L3", np.where(l2_n >= min_improved, "L2", "L1")),
+    )
+
+    if isinstance(land_pct_improved, pd.Series):
+        land_pct_improved_arr = land_pct_improved.reindex(out.index).astype(float).to_numpy()
+    else:
+        land_pct_improved_arr = float(land_pct_improved)
+    land_pct = pd.Series(np.where(is_vacant, land_pct_vacant, land_pct_improved_arr), index=out.index)
+
+    # --- KNN fallback for parcels outside GMA coverage: impute the RATE, not the dollar
+    # value. Imputing a dollar land value directly (the pre-2026-09 behaviour) had an
+    # unmatched small parcel next to large ones inherit a land value sized for their lots,
+    # ignoring its own area -- audit 2026-08-08 finding 5. Imputing the $/sqft rate instead
+    # and then multiplying by this parcel's OWN area and land_pct fixes that: the KNN
+    # contributes only a locally-typical price level, exactly as it does for area.
+    n_knn = int((~gma_matched).sum())
+    zone_psf = pd.Series(_knn_median(zone_psf.values), index=out.index)
+    out["lycd_zone_psf"] = zone_psf
+    out["lycd_land_pct"] = land_pct
+    land = (zone_psf * land_pct * area).clip(lower=0).fillna(0.0)
+
+    # --- Market-value cap, improved parcels only ---
+    # cap_include_building (off by default -- see its docstring): also subtract taxable_building
+    # from the ceiling, so land plus building cannot exceed market_value. `taxable_building` is
+    # OPA's raw pre-abatement figure, 0 for abated parcels at this point in the pipeline (their
+    # building is restored downstream, after this function returns), so this option is a no-op
+    # for abated parcels either way.
+    is_vac_code = cat.isin(vacant)
+    pre_cap = float(land.sum())
+    n_capped = 0
+    if cap_improved_at_market:
+        mv_cap = market.fillna(0).clip(lower=0)
+        if cap_include_building:
+            building = pd.to_numeric(out["taxable_building"], errors="coerce").fillna(0.0).clip(lower=0)
+            mv_cap = (mv_cap - building).clip(lower=0)
+        capped = (land > mv_cap) & ~is_vac_code
+        n_capped = int(capped.sum())
+        land = pd.Series(np.where(~is_vac_code, np.minimum(land, mv_cap), land), index=out.index)
+    post_cap = float(land.sum())
+    out["lycd_land_value"] = land
+
+    diagnostics = {
+        "area_source_counts": area_src.value_counts().to_dict(),
+        "n_area_knn": n_area_knn,
+        "n_pin_override": int(override.sum()),
+        "total_lot_area_sqft": float(area.sum()),
+        "city_area_ratio": city_area_ratio,
+        "n_gma_matched": int(gma_matched.sum()),
+        "gma_match_rate": float(gma_matched.mean()),
+        "n_land_knn": n_knn,
+        "gma_level_counts": out["gma_level"].value_counts().to_dict(),
+        "n_capped": n_capped,
+        "land_base_pre_cap": pre_cap,
+        "land_base_post_cap": post_cap,
+        "cap_removed_share": (pre_cap - post_cap) / pre_cap if pre_cap > 0 else float("nan"),
+        "land_pct_improved": (
+            f"per-parcel Series (median {float(np.median(land_pct_improved_arr)):.4f})"
+            if isinstance(land_pct_improved, pd.Series) else land_pct_improved
+        ),
+        "land_pct_vacant": land_pct_vacant,
+        "min_improved": min_improved,
+        "zone_group_col": zone_group_col,
+        "cap_include_building": cap_include_building,
+    }
+    return LycdResult(out, diagnostics)
+
+
+@dataclass(frozen=True)
+class ExemptionCarryForward:
+    """Output of `carry_forward_exemptions`. All Series are aligned to the input index."""
+    reform_taxable_land: "pd.Series"
+    reform_taxable_building: "pd.Series"
+    reform_taxable_total: "pd.Series"
+    institutional_exempt: "pd.Series"     # stays fully exempt under the reform
+    homestead_active: "pd.Series"         # a Homestead Exemption is re-applied under the reform
+    other_exempt_dollars: "pd.Series"     # non-homestead exemption carried forward in dollars
+    diagnostics: dict
+
+    def describe(self) -> str:
+        d = self.diagnostics
+        return (
+            f"exemption carry-forward: {d['n_homestead_active']:,} homestead parcels re-exempted "
+            f"at min(cap, value) | {d['n_other_exempt']:,} carry non-homestead dollars "
+            f"(abatement / partial) | {d['n_institutional_exempt']:,} stay fully exempt | "
+            f"{d['n_homestead_wiped_reentering']:,} homestead-wiped parcels re-enter the base "
+            f"| flag-without-exemption (vintage mismatch): {d['n_homestead_flag_no_exemption']:,} "
+            f"| OPA-base reconstruction match: {d['reconstruction_match_rate']:.2%}"
+        )
+
+
+def carry_forward_exemptions(
+    gdf,
+    *,
+    new_land_col: str,
+    homestead_cap: float,
+    homestead_col: str = "homestead_exemption",
+    match_tolerance: float = 1.0,
+    reconstruction_floor: float = 0.95,
+    gross_building_override: "pd.Series | None" = None,
+) -> ExemptionCarryForward:
+    """Re-apply each parcel's existing exemptions to a base whose LAND value has changed.
+
+    "Same assessment methodology, land valued differently" means every relief that exists today
+    still exists tomorrow, applied the way OPA applies it. Three kinds of relief show up in the
+    OPA columns, and they carry forward three different ways:
+
+    - **Homestead Exemption** -- a flat statutory amount, `homestead_cap`, applied to the
+      building line first and the remainder to land (verified against OPA data: essentially
+      no homestead parcel has exempt land while taxable building remains). Under the reform
+      it is re-applied as `min(cap, new total)`, so a parcel whose value the new land lifts
+      above the cap becomes taxable again. Active only where OPA's per-parcel flag is set
+      AND an exemption was actually applied this vintage (the flag is current-vintage).
+    - **Everything else that is a dollar amount** -- the 10-year construction abatement
+      (building only) and partial institutional relief -- carried forward in dollars
+      (`exempt_total - homestead`), applied building-first. The building value is unchanged
+      by a land reform, so an abatement's dollars are exactly right.
+    - **Full institutional exemption** -- a rate, not an amount. A fully exempt parcel whose
+      exemption is not explained by the homestead alone stays fully exempt.
+
+    The guard is a reconstruction: feeding OPA's own gross land back through this rule must
+    reproduce OPA's taxable total per parcel. The match rate is reported and enforced
+    (`reconstruction_floor`); if the rule mis-described the exemptions, this is the number that
+    would move. **The guard always checks against OPA's own recorded building value,
+    regardless of `gross_building_override`** -- it validates the exemption RULE (does this
+    rule reproduce today's actual bill from today's actual numbers), which is a fact about the
+    rule, not about whichever building scenario the real call below is exploring.
+
+    `gross_building_override` lets a caller replace "building unchanged, land revised" with a
+    different building scenario for the real (non-guard) computation -- see
+    `compute_residual_building_value` for the reason this exists: holding OPA's own building
+    value fixed while substantially raising land (e.g. LYCD's land estimate) routinely pushes
+    land + building above `market_value`, because `market_value` is OPA's own
+    `taxable_land + taxable_building`, so a land correction implies a building correction too if
+    the total is to stay anchored to the (trusted) market value. The override only changes
+    which building value the SAME exemption rule above is applied to; it changes no exemption
+    logic itself.
+
+    **The override cannot make an abated parcel's building value "pass through unchanged."**
+    `other_exempt` is computed from that SAME parcel's historical exempt total (here, its
+    `exempt_building`), and it is always subtracted from whatever gross building value this
+    function is given -- so feeding an abated row's own `exempt_building` back in as the
+    override cancels it to exactly zero, not to itself. This is not a bug to work around with a
+    cleverer override; it is what "carry forward the existing exemption rule" correctly means
+    for a rule that says the abatement's dollars stay exempt. It is right for the reassessment
+    use case ("same methodology, only land revalued") and wrong for anything that means the
+    abatement to have ended. Exclude abated rows from this call entirely; do not rely on an
+    override to preserve them.
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `taxable_land`, `taxable_building`, `exempt_land`, `exempt_building`,
+        `market_value`, `homestead_col` and `new_land_col`.
+    new_land_col : str
+        The reform's gross (pre-exemption) land value, e.g. `lycd_land_value`.
+    homestead_cap : float
+        The tax year's statutory Homestead Exemption, from `tax_year_params(year)`.
+    gross_building_override : pandas.Series, optional
+        Per-parcel gross (pre-exemption) building value to use for the real computation
+        instead of OPA's own `taxable_building + exempt_building`. Aligned to `gdf.index`;
+        missing/negative values are treated as 0. Leave `None` for the existing behavior
+        (building held at OPA's own recorded value, land alone revised).
+
+    Returns
+    -------
+    ExemptionCarryForward
+    """
+    import numpy as np
+    import pandas as pd
+
+    if homestead_col not in gdf.columns:
+        raise ValueError(
+            f"{homestead_col!r} is not in the frame. Rebuild the parcel cache with "
+            "scripts/build_philadelphia_parcel_cache.py --force; the carry-forward keys the "
+            "Homestead Exemption off OPA's per-parcel flag."
+        )
+
+    def _num(col):
+        return pd.to_numeric(gdf[col], errors="coerce").fillna(0.0).astype(float)
+
+    tax_land, tax_bldg = _num("taxable_land"), _num("taxable_building")
+    ex_land, ex_bldg = _num("exempt_land"), _num("exempt_building")
+    hs_amt = _num(homestead_col).clip(lower=0)
+    gross_bldg = (tax_bldg + ex_bldg).clip(lower=0)
+    gross_land = (tax_land + ex_land).clip(lower=0)
+    ex_total = ex_land + ex_bldg
+    old_taxable = (tax_land + tax_bldg).clip(lower=0)
+    full_exmp = old_taxable <= 0
+
+    hs_active = (hs_amt > 0) & (ex_total > 0)
+    other_exempt = (ex_total - np.where(hs_active, hs_amt, 0.0)).clip(lower=0)
+    homestead_wiped = full_exmp & hs_active & (other_exempt <= match_tolerance)
+    institutional = full_exmp & ~homestead_wiped
+
+    def _apply(new_land: pd.Series, bldg: pd.Series):
+        """Building-first application of the dollar exemptions, then the homestead."""
+        b1 = (bldg - other_exempt).clip(lower=0)
+        spill = (other_exempt - bldg).clip(lower=0)
+        l1 = (new_land - spill).clip(lower=0)
+        hs_ex = pd.Series(np.where(hs_active, np.minimum(homestead_cap, b1 + l1), 0.0), index=gdf.index)
+        b2 = (b1 - hs_ex).clip(lower=0)
+        spill2 = (hs_ex - b1).clip(lower=0)
+        l2 = (l1 - spill2).clip(lower=0)
+        b2 = b2.where(~institutional, 0.0)
+        l2 = l2.where(~institutional, 0.0)
+        return l2, b2
+
+    # Guard: OPA's own land AND OPA's own building through the same rule must reproduce OPA's
+    # own taxable total -- this validates the rule itself, so it never uses the override.
+    rec_land, rec_bldg = _apply(gross_land, gross_bldg)
+    rec_total = rec_land + rec_bldg
+    match = (rec_total - old_taxable).abs() <= match_tolerance
+    match_rate = float(match.mean())
+    if match_rate < reconstruction_floor:
+        raise ValueError(
+            f"Exemption carry-forward reproduces OPA's taxable total on only {match_rate:.2%} of "
+            f"parcels (floor {reconstruction_floor:.0%}). The rule does not describe how this "
+            "vintage's exemptions were applied -- check homestead_cap against the assessment year "
+            "and the homestead flag's vintage before trusting any reform base built on it."
+        )
+
+    new_land = pd.to_numeric(gdf[new_land_col], errors="coerce").fillna(0.0).clip(lower=0)
+    if gross_building_override is not None:
+        bldg_for_reform = gross_building_override.reindex(gdf.index).fillna(0.0).clip(lower=0).astype(float)
+    else:
+        bldg_for_reform = gross_bldg
+    ref_land, ref_bldg = _apply(new_land, bldg_for_reform)
+
+    diagnostics = {
+        "n_homestead_active": int(hs_active.sum()),
+        "n_homestead_flag_no_exemption": int(((hs_amt > 0) & (ex_total <= 0)).sum()),
+        "n_other_exempt": int((other_exempt > match_tolerance).sum()),
+        "n_institutional_exempt": int(institutional.sum()),
+        "n_homestead_wiped": int(homestead_wiped.sum()),
+        "n_homestead_wiped_reentering": int((homestead_wiped & ((ref_land + ref_bldg) > 0)).sum()),
+        "reconstruction_match_rate": match_rate,
+        "reconstruction_mismatch_dollars": float((rec_total - old_taxable)[~match].abs().sum()),
+        "homestead_cap": float(homestead_cap),
+        "used_gross_building_override": gross_building_override is not None,
+    }
+    return ExemptionCarryForward(
+        ref_land, ref_bldg, ref_land + ref_bldg, institutional, hs_active, other_exempt, diagnostics,
+    )
+
+
+def compute_residual_building_value(
+    gdf,
+    land_col: str,
+    market_value_col: str = "market_value",
+) -> "pd.Series":
+    """Gross building value implied by holding `market_value` fixed while revising land.
+
+    Background: a revised land estimate (e.g. LYCD's) routinely exceeds OPA's own implicit
+    land share. Every LYCD notebook currently holds `model_building` at OPA's own recorded
+    value regardless, which means `model_land + model_building` can exceed `market_value` --
+    not a rare edge case: measured on TY2026 with the plain land-only cap, 24.4% of taxable
+    non-vacant parcels already have `lycd_land_value + taxable_building > market_value`, $9.31B
+    of double-counted value in aggregate (see `docs/LYCD_LAND_MODEL_ROADMAP.md`).
+
+    Capping LAND to fix this (`compute_lycd_land_values`'s `cap_include_building`) turns out to
+    reduce to capping land at essentially OPA's own land estimate for most parcels, since
+    `market_value` IS `taxable_land + taxable_building` under OPA's own methodology (true for
+    all but 10 of 583,249 TY2026 parcels) -- it defeats the land correction it was meant to
+    accompany. This function takes the other side of the same identity instead: hold
+    `market_value` (OPA's trusted TOTAL) fixed, and let BUILDING absorb the correction implied
+    by a larger land estimate, exactly as every notebook already does implicitly for the small
+    cohort whose land is capped at exactly `market_value` (documented there as "structure
+    implicitly worth zero") -- this just extends the same idea to every parcel, proportional to
+    how much the land estimate moved, rather than only to the fully-capped extreme.
+
+    This is NOT the same as `model_building = market_value - land` computed carelessly: that
+    naive version compares a GROSS residual (against gross `market_value`) to OPA's actual
+    `taxable_building` column, which is NET of exemptions (Homestead above all) -- silently
+    re-admitting exempted value. Measured on TY2026 that inflated the taxable building base by
+    $43.7B (+40%), touching 99.6% of improved taxable parcels. The fix is sequencing: this
+    function returns a GROSS building value (paired with a GROSS land value), meant to be fed
+    into `carry_forward_exemptions`'s `gross_building_override` -- which re-applies OPA's own
+    exemption rule (homestead, abatement, institutional) to the (land, building) pair AFTER
+    this residual split, so exemptions net out exactly once, not zero or twice.
+
+    **Do not use this for abated parcels, even with an `abated_mask`-style branch that returns
+    their observed `exempt_building` unchanged -- that was tried and does not work.** Feeding
+    an abated row's own `exempt_building` through as this function's output and then into
+    `carry_forward_exemptions`'s `gross_building_override` does NOT preserve it. That function's
+    own exemption-netting computes `other_exempt` from the SAME parcel's historical exempt
+    total and subtracts it from whatever gross building value it is given -- for an abated row
+    that dollar amount IS `exempt_building`, so it cancels back to zero regardless of what this
+    function returns. Measured on TY2026: routing all 14,287 abated parcels through this
+    pipeline (with an abated-passthrough branch that looked correct in isolation) silently
+    zeroed out $16.4B of building value that the four LYCD notebooks currently, correctly,
+    restore via `exempt_building`. Abated parcels must be excluded from the whole
+    residual-and-carry-forward pipeline -- computed and merged in separately, exactly as every
+    LYCD notebook already does -- not routed through it with a clever override. This is a
+    property of `carry_forward_exemptions`'s exemption-netting (it assumes today's exemption
+    RULES persist into the reform, correct for "same methodology, land revalued"), not of this
+    function; it applies to any override, not just this one.
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `land_col` and `market_value_col`.
+    land_col : str
+        The (possibly revised) GROSS land value column -- e.g. `lycd_land_value`, already
+        capped at `market_value` by `compute_lycd_land_values`'s default plain cap, for
+        NON-ABATED rows only (see above -- exclude abated rows before calling this). **This
+        function corrects BUILDING only; it assumes land is already <= market_value and does
+        not enforce that itself.** If land exceeds market_value (an uncapped land column, or a
+        per-row ceiling smaller than the land value used), the residual floors at 0 but land
+        alone still exceeds market_value, so the total can still overshoot -- the
+        `.clip(lower=0)` here is a floor for the ordinary case, not a substitute for the land
+        cap.
+
+    Returns
+    -------
+    pandas.Series
+        Gross (pre-exemption) building value, aligned to `gdf.index`, for use as
+        `carry_forward_exemptions`'s `gross_building_override` on the non-abated subset.
+    """
+    import numpy as np
+    import pandas as pd
+
+    market = pd.to_numeric(gdf[market_value_col], errors="coerce").fillna(0.0).clip(lower=0)
+    land = pd.to_numeric(gdf[land_col], errors="coerce").fillna(0.0).clip(lower=0)
+    return (market - land).clip(lower=0)

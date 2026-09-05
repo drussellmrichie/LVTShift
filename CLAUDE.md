@@ -246,6 +246,9 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 - `docs/WASHINGTON_DC_VACANT_LAND.md` — why DC's Class 3/4 regime reaches idle buildings, not idle land
 - `docs/VACANT_LAND_VALUATION.md` — sales-based test of the OPA vs LYCD land surfaces on vacant
   land: LYCD over-values it, OPA under-values it, and both are severely dispersed
+- `docs/LYCD_LAND_MODEL_ROADMAP.md` — what LYCD is (the allocation method), its defects in order
+  of consequence, the tunings possible inside the method, and what an assessor-grade land model
+  would look like; also documents the LYCD-land reassessment notebook built alongside it
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 - `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
   a prior audit; a new pass writes a new dated file so the two can be compared. The single-tax
