@@ -193,13 +193,16 @@ decomposition columns. Background and the method's limits: `docs/LYCD_LAND_MODEL
 Two shared functions in `lvt/philadelphia.py` carry the modeling choices, so the notebook cannot
 drift from the LVT notebooks by construction:
 
-- **`compute_lycd_land_values`** is the LYCD construction from `model_lycd.ipynb` (lot-area chain,
-  GMA-hierarchical zone medians, KNN fallback, improved-only market-value cap) as one function
-  with a diagnostics dict. The notebook asserts its land base over taxable parcels equals the
-  tracked `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum to 1e-6 relative —
-  identical construction on identical inputs, so any difference means a stale export or a
-  divergence. The tracked LYCD notebooks still carry the construction inline; migrating them to
-  the function is the obvious next step and the drift check is what makes that safe.
+- **`compute_lycd_land_values`** is the LYCD construction (lot-area chain, GMA-hierarchical zone
+  medians, KNN fallback, improved-only market-value cap) as one function with a diagnostics dict.
+  `model_lycd.ipynb` (migrated 2026-09-04) and `model_lycd_reassessment.ipynb` both call it;
+  `model_lycd.ipynb`'s re-executed output was bit-for-bit identical to its prior inline
+  construction. `model_lycd_reassessment.ipynb` additionally asserts its land base over taxable
+  parcels equals the tracked `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum to
+  1e-6 relative — identical construction on identical inputs, so any difference means a stale
+  export or a divergence. `model_lycd_post_abatement.ipynb` and `model_lycd_refined_prototype.ipynb`
+  still carry the construction inline; migrating them is the natural next step, and the drift
+  check plus the bit-for-bit precedent are what make that safe to verify.
 - **`carry_forward_exemptions`** is the rule for "same methodology, land valued differently":
   the Homestead Exemption is re-applied as `min(cap, new total)`, building-first (so a homestead
   whose LYCD land lifts it above the cap becomes taxable again — the "re-entering" cohort);
