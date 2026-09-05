@@ -10,11 +10,12 @@ assume: the two recurring failure shapes, the design patterns, the module map, a
 Documentation index. Where a rule below says "see the guard-shape rule above", it means the
 root file.
 
-Philadelphia has nine notebooks. Four follow the standard export convention —
-`model.ipynb`, `model_lycd.ipynb` and their `_post_abatement` variants. Four more each follow
+Philadelphia has ten notebooks. Four follow the standard export convention —
+`model.ipynb`, `model_lycd.ipynb` and their `_post_abatement` variants. Five more each follow
 a different paradigm with its own export slug: `model_wage_tax_swap.ipynb`,
-`model_lvt_ubi.ipynb`, `model_single_tax_ledger.ipynb`, `model_ocd_land_assessment.ipynb`.
-The ninth, `model_lycd_refined_prototype.ipynb`, is a prototype and is not part of any
+`model_lvt_ubi.ipynb`, `model_single_tax_ledger.ipynb`, `model_ocd_land_assessment.ipynb`, and
+`model_lycd_reassessment.ipynb` (a tax-*base* shift, see "LYCD-land reassessment" below).
+The tenth, `model_lycd_refined_prototype.ipynb`, is a prototype and is not part of any
 documented pipeline.
 
 ## Philadelphia — OPA / Carto Data Patterns
@@ -177,6 +178,42 @@ the webmap's tile build in WSL) ships no Parquet/Arrow driver and no plugin pack
 Separately, the Windows conda `gdal`/`pyogrio` install fails outright (`GDAL DLL could not be
 found`), so no vector I/O of any format works from Windows Python. Do not assume `ogr2ogr -f Parquet`
 works just because `ogr2ogr` is on PATH — check `ogr2ogr --formats` for the format you need.
+
+## Philadelphia — LYCD-land reassessment (`model_lycd_reassessment.ipynb`)
+
+Models OPA's current methodology and flat combined rate with **only the land component re-valued
+by LYCD**, rolled back to revenue neutrality via `lvt.reassessment` — the tax-base question that
+precedes any rate change. Export: `analysis/data/philadelphia_lycd_reassessment_ty<YEAR>.csv`,
+`MODEL_TYPE = 'reassessment:lycd_land_ty<YEAR>'`; `new_tax` is the flat-rate reassessment, and the
+stacked 4:1 split-rate lives only in the `reassess_change` / `lvt_change` / `total_change`
+decomposition columns. Background and the method's limits: `docs/LYCD_LAND_MODEL_ROADMAP.md`.
+
+Two shared functions in `lvt/philadelphia.py` carry the modeling choices, so the notebook cannot
+drift from the LVT notebooks by construction:
+
+- **`compute_lycd_land_values`** is the LYCD construction from `model_lycd.ipynb` (lot-area chain,
+  GMA-hierarchical zone medians, KNN fallback, improved-only market-value cap) as one function
+  with a diagnostics dict. The notebook asserts its land base over taxable parcels equals the
+  tracked `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum to 1e-6 relative —
+  identical construction on identical inputs, so any difference means a stale export or a
+  divergence. The tracked LYCD notebooks still carry the construction inline; migrating them to
+  the function is the obvious next step and the drift check is what makes that safe.
+- **`carry_forward_exemptions`** is the rule for "same methodology, land valued differently":
+  the Homestead Exemption is re-applied as `min(cap, new total)`, building-first (so a homestead
+  whose LYCD land lifts it above the cap becomes taxable again — the "re-entering" cohort);
+  abatement and partial relief are carried forward in dollars (the building value is unchanged
+  by a land reform, so an abatement's dollars are exactly right); a full institutional exemption
+  is a rate, not an amount, and stays. The homestead keys off OPA's per-parcel
+  `homestead_exemption` dollar column AND an exemption actually applied this vintage, because
+  the flag is current-vintage. **Its guard is a reconstruction**: OPA's own gross land fed through
+  the same rule must reproduce OPA's taxable total per parcel (the floor is 95%; the observed rate
+  is printed). That is the number that would move if the rule mis-described the exemptions.
+
+Two things to keep straight when reading its output. The LVT notebooks do *not* re-apply the
+homestead to LYCD land (their `model_building` is post-exemption, their land is gross), so their
+SFR land base is slightly larger than this notebook's — a known simplification there, not a
+discrepancy. And the `knn` lot-area-source cohort (condo units and other records with no lot of
+their own) is a cap artifact, not a land-value finding; the notebook says so where it prints it.
 
 ## Philadelphia — Wage Tax Swap
 
