@@ -47,7 +47,7 @@ Two properties of the construction matter for everything below:
 | Linear in lot area | Sibling ratio study: PRD far above 1.0 on vacant land; `philly_open_avmkit` measures a negative partial correlation of $/sqft with log area and a positive one with frontage/depth | Yes |
 | ~~KNN fallback imputes neighbours' dollar land value, not zone $/sqft times own area~~ | Audit finding 5 | **Fixed 2026-09-05** |
 | Records with no lot area of their own (condominium units above all) take a neighbour's whole-lot area, then hit the cap at 100% of unit value | `model_lycd_reassessment.ipynb` Step 7, the `knn` lot-area-source row | Needs a per-unit share of the building lot, not a tuning |
-| ~~Cap clips land to market value, leaving land + building above market on 24.4% of taxable parcels ($9.31B aggregate)~~ | Audit finding 2, re-measured 2026-09-05 -- materially larger than the audit's original framing (19,514 parcels at land ratio 1.00) | **Fixed 2026-09-05** (residual-building design, below), not yet used by any notebook |
+| ~~Cap clips land to market value, leaving land + building above market on 24.4% of taxable parcels ($9.31B aggregate)~~ | Audit finding 2, re-measured 2026-09-05 -- materially larger than the audit's original framing (19,514 parcels at land ratio 1.00) | **Fixed 2026-09-05**, wired into `model_lycd.ipynb` |
 | Hard L3 medians step at zone boundaries | Not quantified | Yes (smoothing) |
 
 The first row dominates. It is the one defect that is *empirically decidable*: for a bare lot
@@ -127,12 +127,20 @@ near 1.0, with COD read net of the noise floor.
    where LYCD's zone rate diverges more from OPA's implicit split, e.g. industrial building
    down a median $105,765, hotel building UP a median $200,670).
 
-   This is a materially better candidate for actually wiring into a notebook than the
-   land-cap option, precisely because it leaves the model's core distributional claim (land
-   values) untouched. It has not been wired into any notebook yet -- that is a separate
-   decision, not because the mechanism is unverified, but because it is still a real change
-   to every notebook's reform-base construction and deserves its own review pass, ideally by
-   someone who did not just spend an afternoon debugging it.
+   **Wired into `model_lycd.ipynb`** (2026-09-06), restricted to non-abated parcels already
+   in today's taxable base (`full_exmp == 0`) -- deliberately not extended to let today's
+   fully-exempt parcels re-enter under a larger land value, which is
+   `model_lycd_reassessment.ipynb`'s question, not this notebook's. The notebook asserts the
+   no-overshoot invariant on every run (non-vacant, ordinary-taxable parcels) and asserts
+   zero homestead-wiped re-entries (a guard that the `full_exmp == 0` restriction is actually
+   doing its job). Re-executed: land millage 21.91 -> 22.15 mills, improvement millage 5.48
+   -> 5.54 mills, reform improvement base $126.21B -> $121.97B, revenue exactly neutral;
+   category-level changes are modest and continuous, consistent with the ~$4.24B aggregate
+   effect (no category swung sign). `model_lycd_post_abatement.ipynb` and
+   `model_lycd_refined_prototype.ipynb` still use the plain (uncorrected) building treatment;
+   wiring them in is the natural next step and should be similarly mechanical, since both
+   already carry the same abated-parcel exempt_building restoration this mechanism must stay
+   clear of.
 
    The "market minus depreciated structure cost" extraction-method version (using a genuine
    independent structure-cost estimate rather than either OPA's building figure or a
@@ -210,8 +218,8 @@ reassess-then-split-rate shift into its two components. Its export is
 ## Resolved
 
 - **Land + building can exceed market_value; exemption-aware residual building fixes it**
-  (2026-09-05, built and verified, not yet used by any notebook). See Stage A item 4 above
-  for the full account, including the abated-parcel trap
+  (built and verified 2026-09-05; wired into `model_lycd.ipynb` 2026-09-06). See Stage A
+  item 4 above for the full account, including the abated-parcel trap
   (`lvt.philadelphia.compute_residual_building_value`,
   `carry_forward_exemptions`'s `gross_building_override`). Measured effect: zero
   double-counting outside the vacant-land cohort and one data anomaly; abated cohort

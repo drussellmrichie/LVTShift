@@ -222,19 +222,30 @@ drift from the LVT notebooks by construction:
   LYCD/OPA ratio from 1.54x to 1.32x. Left off — not the recommended fix for this problem.
 
   **The recommended fix is `compute_residual_building_value` + `carry_forward_exemptions`'s
-  `gross_building_override`** (built and verified 2026-09-05, not yet used by any notebook).
-  Holds land at LYCD's full value and lets BUILDING absorb the correction instead
-  (`market_value - land`, then exemptions re-applied so they net exactly once) — no
-  collateral damage to the land finding, unlike the cap option: citywide combined base moves
-  -$4.24B (-1.8%), not a large land compression. **One sharp gotcha: abated parcels must be
+  `gross_building_override`, wired into `model_lycd.ipynb` (2026-09-06).** Holds land at
+  LYCD's full value and lets BUILDING absorb the correction instead (`market_value - land`,
+  then exemptions re-applied so they net exactly once) — no collateral damage to the land
+  finding, unlike the cap option: citywide combined base moved -$4.24B (-1.8%), not a large
+  land compression; land millage 21.91 -> 22.15 mills, improvement millage 5.48 -> 5.54
+  mills, revenue exactly neutral. Restricted to non-abated parcels already in today's
+  taxable base (`full_exmp == 0`) — deliberately not extended to homestead-wiped re-entry,
+  which is `model_lycd_reassessment.ipynb`'s question, not this notebook's; the notebook
+  asserts zero re-entries as a guard that this restriction is doing its job, plus a
+  no-overshoot assertion (non-vacant, ordinary-taxable) on every run. `model_lycd_post_abatement.ipynb`
+  and `model_lycd_refined_prototype.ipynb` still use the plain (uncorrected) building
+  treatment.
+
+  **One sharp gotcha, worth re-reading before touching this code: abated parcels must be
   excluded from the `carry_forward_exemptions` call entirely, not passed through it with an
   override.** That function's exemption-netting always subtracts a parcel's own historical
   exempt total from whatever building value it is given; for an abated row that total IS
   `exempt_building`, so supplying it back as the override cancels it to zero instead of
   preserving it. A synthetic unit test that looked like it caught this passed anyway, because
   it was comparing two calls that were equally wrong to each other — the real cache is what
-  actually caught it ($16.4B silently zeroed). See `docs/LYCD_LAND_MODEL_ROADMAP.md` Stage A
-  item 4 for the full account and the exact numbers.
+  actually caught it ($16.4B silently zeroed). `model_lycd.ipynb`'s Step 6 keeps the abated
+  cohort on its existing `exempt_building` restoration, entirely separate from this
+  mechanism. See `docs/LYCD_LAND_MODEL_ROADMAP.md` Stage A item 4 for the full account and
+  the exact numbers.
 
   Two of the function's parameters exist only for the refined prototype and default to the
   base behavior for everyone else: `zone_group_col` (a column name; when given, zone medians
