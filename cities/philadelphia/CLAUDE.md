@@ -290,6 +290,21 @@ drift from the LVT notebooks by construction:
   `market_value`, `taxable_total`, `dor_area_sqft`, `lycd_zone_psf`, `gma3` — the last five
   exist so the report generator can run the ordinance's uniformity tests without the cache.
 
+- **`paint_land_surface`** (2026-09-05, notebook Step 2b, `LVT_LAND_SURFACE=<column>`) swaps
+  an externally estimated land **rate** onto this repo's parcels. The surface comes from
+  `philly_open_avmkit/notebooks/pipeline/run_land_surfaces.py` (`out/land/land_surfaces_ty<YEAR>.csv`,
+  keyed `parcel_number`, several candidate $/sqft columns; `s2_k20` is the sales-interpolated
+  surface, `s3` the schedule). It imports a rate, never a dollar value, and multiplies by this
+  repo's own `dor_area_sqft` — the two repos' areas agree within 5% on 99.9% of joined parcels,
+  but a rate keeps them decoupled by construction. Coverage is why it is a function and not a
+  merge: about 55k parcels (a fifth of market value) are not in the AVM universe; they take the
+  median rate of their nearest matched neighbours via the same `_knn_median_fill` LYCD uses and
+  are flagged `land_surface_source == 'knn'`. The improved cap is LYCD's, so a swap changes the
+  rate and nothing else; `n_land_exceeds_total` counts where the surface's land alone exceeds
+  OPA's total before the cap (a § 3(c) finding about the totals). The export slug and
+  `MODEL_TYPE` carry the surface name so runs never overwrite the LYCD export, and every
+  downstream step (both readings, the assertions, the census join) is surface-agnostic.
+
 The PPI report on both readings and the ordinance's own tests lives in
 `analysis/lycd_reassessment/philadelphia/paper/` (generator-driven; `Report.tex` carries no
 literals). Its mechanism-level findings are summarized in `docs/LYCD_LAND_MODEL_ROADMAP.md`

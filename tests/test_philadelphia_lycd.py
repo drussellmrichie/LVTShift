@@ -19,6 +19,7 @@ from lvt.philadelphia import (  # noqa: E402
     carry_forward_exemptions,
     compute_residual_building_value,
     reallocate_land_within_total,
+    paint_land_surface,
 )
 
 
@@ -621,3 +622,59 @@ def test_reallocate_requires_homestead_column():
     df = _exemption_cases().drop(columns=["homestead_exemption"])
     with pytest.raises(ValueError, match="homestead_exemption"):
         _realloc(df, 1.0)
+
+
+# --- paint_land_surface: an external $/sqft surface onto LVTShift's own parcels ------------
+
+def _painted_city():
+    """The toy city with LYCD already run (so dor_area_sqft exists), plus a surface that
+    covers zone A only -- zone B is the 'not in the AVM universe' cohort."""
+    gdf, gma, pin_areas = _toy_city()
+    gdf = compute_lycd_land_values(gdf, gma, pin_areas).gdf
+    in_a = gdf["zone"].eq("A")
+    surface = pd.DataFrame({
+        # un-padded keys on purpose: the join must normalise to 9 digits
+        "parcel_number": gdf.loc[in_a, "parcel_number"].str.lstrip("0"),
+        "s2_k20": 7.5,
+    })
+    return gdf, surface
+
+
+def test_paint_surface_uses_own_area_and_caps_improved():
+    gdf, surface = _painted_city()
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3)
+    d = res.diagnostics
+    assert d["n_matched"] == int(gdf["zone"].eq("A").sum())
+    assert d["n_knn"] == int((~gdf["zone"].eq("A")).sum())
+    # A matched improved parcel: rate x ITS OWN area, and the cap does not bind here
+    # (7.5 x 1000 = 7,500 < market 100,000).
+    a = gdf[gdf["zone"].eq("A") & gdf["category_code"].eq("1")].index[0]
+    assert res.land_value[a] == pytest.approx(7.5 * gdf.loc[a, "dor_area_sqft"])
+    assert res.source[a] == "surface"
+
+
+def test_paint_surface_knn_fills_rate_not_dollars():
+    gdf, surface = _painted_city()
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3)
+    # Zone B parcels are unmatched; they take the neighbours' RATE (7.5, the only rate that
+    # exists) and multiply by their own area -- the vacant 500 sqft lot must not inherit a
+    # 1,000 sqft neighbour's dollar value.
+    b_vac = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("6")].index[0]
+    assert res.source[b_vac] == "knn"
+    assert res.psf[b_vac] == pytest.approx(7.5)
+    assert res.land_value[b_vac] == pytest.approx(7.5 * 500.0)
+
+
+def test_paint_surface_cap_binds_on_improved_only():
+    gdf, surface = _painted_city()
+    surface["s2_k20"] = 1_000.0      # $1,000/sqft: 1,000 sqft lot -> $1M land, market is $100k
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3)
+    a_imp = gdf[gdf["zone"].eq("A") & gdf["category_code"].eq("1")].index[0]
+    a_vac = gdf[gdf["zone"].eq("A") & gdf["category_code"].eq("6")].index[0]
+    assert res.land_value[a_imp] == pytest.approx(gdf.loc[a_imp, "market_value"])
+    assert res.land_value[a_vac] == pytest.approx(1_000.0 * 500.0)    # vacant uncapped
+    assert res.diagnostics["n_land_exceeds_total"] >= 1
+    assert res.diagnostics["n_capped"] == res.diagnostics["n_land_exceeds_total"]
+    off = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3, cap_improved_at_market=False)
+    assert off.diagnostics["n_capped"] == 0
+    assert off.land_value[a_imp] == pytest.approx(1_000.0 * 1_000.0)

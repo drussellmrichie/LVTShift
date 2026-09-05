@@ -104,6 +104,231 @@ def load():
 
 
 # --------------------------------------------------------------------------- #
+# The sales-based surface (Phase 2 of the second analysis)
+# --------------------------------------------------------------------------- #
+# philly_open_avmkit owns the land evidence and the held-out scoring; LVTShift reads its
+# outputs read-only (never the reverse). The S2 export is this notebook re-run with
+# LVT_LAND_SURFACE=s2_k20, so every tax-side number for S2 comes through the same code path
+# as LYCD's and differs only in the land rate.
+PHILLY_LAND = Path(r"C:\projects\philly_open_avmkit\notebooks\pipeline\data\us-pa-philadelphia\out\land")
+S2_SLUG = f"{SLUG}_s2_k20"
+S2_COLS = ["parcel_id", "lycd_land_value", "alloc_land", "alloc_tax_change", "alloc_tax_change_pct",
+           "tax_change", "tax_change_pct", "current_tax", "land_millage", "land_surface_source",
+           "land_surface_psf", "lycd_land_value_lycd", "opa_gross_land", "opa_gross_building",
+           "market_value", "institutional_exempt", "property_category", "exemption_kind",
+           "std_geoid", "dor_area_sqft", "abated", "area_source"]
+
+
+def load_s2():
+    """The S2 run of the notebook plus the sibling repo's evidence and scores, or None."""
+    p = DATA / f"{S2_SLUG}.csv"
+    if not p.exists() or not (PHILLY_LAND / "scores.csv").exists():
+        print(f"  [warn] S2 inputs missing ({p.name} or philly scores.csv); S2 section skipped")
+        return None
+    s2 = pd.read_csv(p, usecols=S2_COLS, dtype={"parcel_id": str, "std_geoid": str})
+    return {
+        "export": s2,
+        "witnesses": pd.read_csv(PHILLY_LAND / "witnesses.csv"),
+        "scores": pd.read_csv(PHILLY_LAND / "scores.csv"),
+        "h2h": pd.read_csv(PHILLY_LAND / "head_to_head.csv"),
+    }
+
+
+def s2_section(df, s2, H):
+    """Macros, tables and the figure for the sales-based surface."""
+    w, sc, h2h, ex = s2["witnesses"], s2["scores"], s2["h2h"], s2["export"]
+
+    # --- the evidence ---------------------------------------------------------------
+    by = w.groupby("kind")["psf_adj"].agg(["size", "median"])
+    H.add("WitN", len(w), num)
+    for k, nm in (("W1", "Wone"), ("W1b", "Woneb"), ("W2", "Wtwo")):
+        if k in by.index:
+            H.add(f"{nm}N", int(by.loc[k, "size"]), num)
+            H.add(f"{nm}Psf", by.loc[k, "median"], lambda x: f"${x:,.2f}")
+    if {"W1", "W1b", "W2"} <= set(by.index):
+        H.add("WonebOverWone", by.loc["W1b", "median"] / by.loc["W1", "median"], ratio)
+        H.add("WtwoOverWone", by.loc["W2", "median"] / by.loc["W1", "median"], ratio)
+    H.add("WitSubMinPct", 100 * w["sub_minimum"].mean(), pct)
+    desc = {"W1": "Sold vacant, still vacant", "W1b": "Sold vacant, since built on",
+            "W2": "Sold improved, demolished within a year"}
+    tbl = pd.DataFrame({
+        "Evidence": [desc[k] for k in by.index],
+        "Sales": by["size"].map(num).values,
+        "Median \\$/sqft": by["median"].map(lambda x: f"\\${x:,.2f}").values,
+    })
+    save_table(TABLES / "witness_streams.tex", tbl, col_format="X r r", escape=False)
+
+    # --- held-out accuracy ------------------------------------------------------------
+    allw = sc[sc["subset"].eq("all witnesses")].set_index("candidate")
+    keymap = {"S0 OPA assessed land": "Szero", "S1 LYCD zone-rate allocation": "Sone",
+              "S2 kNN interpolation (k=20)": "Stwo", "S3 published schedule": "Sthree",
+              "S4 Kolbe extraction (in-sample)": "Sfour"}
+    for cand, nm in keymap.items():
+        if cand in allw.index:
+            r = allw.loc[cand]
+            H.add(f"{nm}TrCod", r["tr_cod"], lambda x: f"{x:.0f}")
+            H.add(f"{nm}RawCod", r["cod"], lambda x: f"{x:.0f}")
+            H.add(f"{nm}TrMedian", r["tr_median"], lambda x: f"{x:.2f}")
+            H.add(f"{nm}TrPrd", r["tr_prd"], lambda x: f"{x:.2f}")
+    r2 = allw.loc["S2 kNN interpolation (k=20)"]
+    H.add("StwoNetLo", r2["cod_net_lo"], lambda x: f"{x:.0f}")
+    H.add("StwoNetHi", r2["cod_net_hi"], lambda x: f"{x:.0f}")
+    r0 = allw.loc["S0 OPA assessed land"]
+    H.add("SzeroNetLo", r0["cod_net_lo"], lambda x: f"{x:.0f}")
+    H.add("SzeroNetHi", r0["cod_net_hi"], lambda x: f"{x:.0f}")
+    H.add("HeldoutN", int(r2["n"]), num)
+    order = ["S0 OPA assessed land", "S1 LYCD zone-rate allocation", "S2 kNN interpolation (k=20)",
+             "S3 published schedule", "S4 Kolbe extraction (in-sample)"]
+    short = {"S0 OPA assessed land": "OPA assessed land",
+             "S1 LYCD zone-rate allocation": "LYCD zone-rate allocation",
+             "S2 kNN interpolation (k=20)": "Interpolation among land sales (k=20)",
+             "S3 published schedule": "Published rate schedule",
+             "S4 Kolbe extraction (in-sample)": "Kolbe extraction (in-sample)"}
+    brief = {"S0 OPA assessed land": "OPA", "S1 LYCD zone-rate allocation": "LYCD allocation",
+             "S2 kNN interpolation (k=20)": "Interpolation", "S3 published schedule": "Schedule",
+             "S4 Kolbe extraction (in-sample)": "Kolbe"}
+    rows = allw.loc[[c for c in order if c in allw.index]]
+    tbl = pd.DataFrame({
+        "Surface": [short[c] for c in rows.index],
+        "Held out": ["yes" if h else "no" for h in rows["held_out"]],
+        "n": rows["n"].map(num).values,
+        "Median": rows["tr_median"].map(lambda x: f"{x:.2f}").values,
+        "COD, trimmed": rows["tr_cod"].map(lambda x: f"{x:.0f}").values,
+        "COD, raw": rows["cod"].map(lambda x: f"{x:.0f}").values,
+        "PRD": rows["tr_prd"].map(lambda x: f"{x:.2f}").values,
+    })
+    save_table(TABLES / "heldout.tex", tbl, col_format="X l r r r r r", escape=False)
+
+    # Per-stream COD for the surfaces that matter -- where does each one do its work?
+    piv = sc.pivot_table(index="candidate", columns="subset", values="tr_cod")
+    subsets = [s for s in ("W1 only", "W1b only", "W2 only") if s in piv.columns]
+    rows = piv.loc[[c for c in order if c in piv.index], subsets]
+    tbl = pd.DataFrame({"Surface": [short[c] for c in rows.index]})
+    for s, lab in zip(subsets, ("Still vacant", "Since built on", "Teardown")):
+        tbl[lab] = rows[s].map(lambda x: f"{x:.0f}" if np.isfinite(x) else "---").values
+    save_table(TABLES / "heldout_by_stream.tex", tbl, col_format="X r r r", escape=False)
+    for cand, nm in keymap.items():
+        if cand in piv.index:
+            for s, lab in zip(subsets, ("Wone", "Woneb", "Wtwo")):
+                H.add(f"{nm}TrCod{lab}", piv.loc[cand, s], lambda x: f"{x:.0f}")
+
+    # --- head to head -------------------------------------------------------------------
+    hk = {("S2 kNN interpolation (k=20)", "S3 published schedule"): "StwoVsSthree",
+          ("S2 kNN interpolation (k=20)", "S0 OPA assessed land"): "StwoVsSzero",
+          ("S3 published schedule", "S0 OPA assessed land"): "SthreeVsSzero",
+          ("S0 OPA assessed land", "S1 LYCD zone-rate allocation"): "SzeroVsSone"}
+    rows = []
+    for _, r in h2h.iterrows():
+        nm = hk.get((r["a"], r["b"]))
+        if nm is None:
+            continue
+        H.add(f"{nm}Diff", r["cod_diff"], lambda x: f"{x:+.1f}")
+        H.add(f"{nm}DiffAbs", abs(r["cod_diff"]), lambda x: f"{x:.1f}")
+        H.add(f"{nm}Lo", r["lo"], lambda x: f"{x:+.1f}")
+        H.add(f"{nm}Hi", r["hi"], lambda x: f"{x:+.1f}")
+        H.add(f"{nm}P", r["p_a_better"], lambda x: f"{x:.3f}")
+        rows.append({"A": brief[r["a"]], "B": brief[r["b"]],
+                     "COD difference": f"{r['cod_diff']:+.1f}",
+                     "95\\% interval": f"[{r['lo']:+.1f}, {r['hi']:+.1f}]",
+                     "P(A better)": f"{r['p_a_better']:.3f}"})
+    save_table(TABLES / "head_to_head.tex", pd.DataFrame(rows), col_format="X X r r r", escape=False)
+
+    # --- what S2 does to the roll ---------------------------------------------------------
+    b = ex[(ex["institutional_exempt"] == 0) & (ex["current_tax"] > 0)]
+    H.add("StwoKnnParcels", int(ex["land_surface_source"].eq("knn").sum()), num)
+    H.add("StwoKnnValuePct",
+          100 * ex.loc[ex["land_surface_source"].eq("knn"), "market_value"].sum() / ex["market_value"].sum(), pct)
+    H.add("StwoLandBaseB", ex["lycd_land_value"].sum() / 1e9, usd_b)
+    H.add("LycdLandBaseB", ex["lycd_land_value_lycd"].sum() / 1e9, usd_b)
+    H.add("OpaLandBaseB", ex["opa_gross_land"].sum() / 1e9, usd_b)
+    H.add("StwoOverOpaLand", ex["lycd_land_value"].sum() / ex["opa_gross_land"].sum(), ratio)
+    H.add("StwoOverLycdLand", ex["lycd_land_value"].sum() / ex["lycd_land_value_lycd"].sum(), ratio)
+    imp = ex[ex["opa_gross_building"] > 0].copy()
+    share = imp["lycd_land_value"] / imp["market_value"].replace(0, np.nan)
+    H.add("StwoImprovedLandShareMedian", share.median(), lambda x: f"{x:.2f}")
+    # Sec. 3(c) on the sales-based surface: how often does land ALONE exceed OPA's total
+    # assessment before the cap binds? Measured on the pre-cap value (rate x area), since the
+    # exported land value is already capped. Split out the cohort whose lot area is itself
+    # imputed (condominium units and other records with no lot of their own, which inherit a
+    # neighbour's whole-lot area): their overshoot is the known area artifact, not evidence
+    # about OPA's totals.
+    imp["pre_cap"] = imp["land_surface_psf"] * imp["dor_area_sqft"]
+    over = imp["pre_cap"] > imp["market_value"]
+    condo_like = imp["area_source"].eq("knn")
+    H.add("StwoPreCapExceeds", int(over.sum()), num)
+    H.add("StwoPreCapExceedsPct", 100 * over.mean(), pct)
+    H.add("StwoPreCapExceedsCondo", int((over & condo_like).sum()), num)
+    H.add("StwoPreCapExceedsCore", int((over & ~condo_like).sum()), num)
+    H.add("StwoPreCapExceedsCorePct", 100 * (over & ~condo_like).sum() / (~condo_like).sum(), pct)
+    H.add("StwoCapRemovedB", (imp.loc[over, "pre_cap"] - imp.loc[over, "market_value"]).sum() / 1e9, usd_b)
+    H.add("StwoCapRemovedCoreB",
+          (imp.loc[over & ~condo_like, "pre_cap"] - imp.loc[over & ~condo_like, "market_value"]).sum() / 1e9, usd_b)
+    H.add("StwoKnnFillPsf", ex.loc[ex["land_surface_source"].eq("knn"), "land_surface_psf"].median(), lambda x: f"${x:,.0f}")
+    H.add("StwoJoinedPsf", ex.loc[ex["land_surface_source"].eq("surface"), "land_surface_psf"].median(), lambda x: f"${x:,.0f}")
+
+    # reading C under S2
+    moved = b["alloc_tax_change"].abs() > 0.01
+    H.add("StwoCMoved", int(moved.sum()), num)
+    H.add("StwoCMovedPct", 100 * moved.mean(), pct)
+    lev = b["alloc_tax_change"].sum()
+    H.add("StwoCLevyAbsM", abs(lev) / 1e6, lambda x: f"${x:,.1f}M")
+    H.add("StwoCLevySign", "falls" if lev < 0 else "rises")
+    H.add("StwoCLevyPct", 100 * lev / ex["current_tax"].sum(), lambda x: f"{x:+.2f}%")
+    ab = b[moved & (b["abated"] == 1)]
+    H.add("StwoCAbatedMedianPct", ab["alloc_tax_change_pct"].median(), lambda x: f"{x:+.1f}%")
+    # reading A under S2
+    H.add("StwoAMillage", float(ex["land_millage"].iloc[0]), lambda x: f"{x:.4f}")
+    H.add("StwoADownTenPct", 100 * (b["tax_change_pct"] < -10).mean(), pct)
+    H.add("StwoAUpTenPct", 100 * (b["tax_change_pct"] > 10).mean(), pct)
+    vac = b[b["property_category"] == "Vacant Land"]
+    H.add("StwoAVacantMedianPct", vac["tax_change_pct"].median(), lambda x: f"{x:+,.0f}%")
+    H.add("StwoAVacantShareOfShift",
+          100 * vac["tax_change"].clip(lower=0).sum() / b["tax_change"].clip(lower=0).sum(), pct)
+
+    fig_s2(allw, order, short, ex)
+    return ex
+
+
+def fig_s2(allw, order, short, ex):
+    """Left: held-out dispersion by surface. Right: where the sales-based surface departs
+    from LYCD, by tract."""
+    try:
+        import geopandas as gpd
+    except ImportError:
+        gpd = None
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.9), gridspec_kw={"width_ratios": [1.0, 1.15]})
+    rows = allw.loc[[c for c in order if c in allw.index]]
+    labels = [short[c].replace(" (", "\n(") for c in rows.index]
+    colours = [PPI_COLORS["accent"] if "Interpolation" in short[c] else PPI_COLORS["primary"]
+               for c in rows.index]
+    axes[0].barh(labels, rows["tr_cod"], color=colours)
+    axes[0].axvline(IAAO_COD, color=PPI_COLORS["dark"], lw=1.0, ls="--")
+    axes[0].annotate("IAAO", (IAAO_COD + 1, 0.55), fontsize=7, color=PPI_COLORS["dark"])
+    axes[0].invert_yaxis()
+    axes[0].set_xlabel("held-out COD, trimmed (lower is better)")
+    axes[0].tick_params(axis="y", labelsize=7)
+
+    if gpd is not None:
+        geo = gpd.read_parquet(CITY_DATA / "census_tracts.gpq")
+        geo["tract_geoid"] = geo["GEOID"].astype(str)
+        t = ex.dropna(subset=["std_geoid"]).copy()
+        t["tract_geoid"] = t["std_geoid"].astype(str).str.zfill(12).str[:11]
+        agg = t.groupby("tract_geoid").agg(s2=("lycd_land_value", "sum"),
+                                          lycd=("lycd_land_value_lycd", "sum"))
+        agg["ratio"] = agg["s2"] / agg["lycd"].replace(0, np.nan)
+        g = geo.merge(agg, on="tract_geoid", how="inner")
+        g.plot(column=np.log2(g["ratio"].clip(0.25, 4.0)), cmap="RdBu_r", vmin=-2, vmax=2,
+               linewidth=0.1, edgecolor="white", ax=axes[1], legend=True,
+               legend_kwds={"label": "sales-based ÷ LYCD land (log2)",
+                            "orientation": "horizontal", "shrink": 0.8, "pad": 0.02,
+                            "extend": "both"})
+        axes[1].set_axis_off()
+    fig.tight_layout()
+    fig.savefig(FIGS / "s2_surface.pdf")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
 # Scenario slices
 # --------------------------------------------------------------------------- #
 def billed(df):
@@ -228,7 +453,10 @@ def uniformity_tests(df, H):
     # `alloc_land` is what the ordinance's re-split would actually certify, and the two differ
     # exactly where it matters for Sec. 3(b): a vacant parcel's re-split land is capped at its
     # own total, i.e. OPA's own vacant value, so the raw method's vacant leg never reaches the roll.
-    SURFACES = (("OPA", "opa_gross_land"), ("LYCD", "lycd_land_value"), ("Resplit", "alloc_land"))
+    SURFACES = [("OPA", "opa_gross_land"), ("LYCD", "lycd_land_value"), ("Resplit", "alloc_land")]
+    # The sales-based surface, when its run exists (merged onto df in main()).
+    if "s2_land" in d.columns:
+        SURFACES += [("Stwo", "s2_land"), ("StwoResplit", "s2_alloc_land")]
     for name, col in SURFACES:
         d[f"psf_{name}"] = land_psf(d, col)
 
@@ -238,7 +466,7 @@ def uniformity_tests(df, H):
     for name, _ in SURFACES:
         med = z.groupby(["gma3", "improved"])[f"psf_{name}"].median().unstack()
         r = (med[False] / med[True]).replace([np.inf, -np.inf], np.nan).dropna()
-        rows.append({"surface": name, "test": "Vacant vs improved land \\$/sqft, same zone",
+        rows.append({"surface": name, "test": "Vacant vs improved, same zone",
                      "n": len(r), "value": r.median()})
         H.add(f"Uni{name}VacantImprovedRatio", r.median(), ratio)
         H.add(f"Uni{name}VacantImprovedZones", len(r), num)
@@ -249,7 +477,7 @@ def uniformity_tests(df, H):
     for name, _ in SURFACES:
         med = z.groupby(["gma3", "abated"])[f"psf_{name}"].median().unstack()
         r = (med[1] / med[0]).replace([np.inf, -np.inf], np.nan).dropna()
-        rows.append({"surface": name, "test": "Abated vs unabated land \\$/sqft, same zone",
+        rows.append({"surface": name, "test": "Abated vs unabated, same zone",
                      "n": len(r), "value": r.median()})
         H.add(f"Uni{name}AbatedRatio", r.median(), ratio)
 
@@ -265,7 +493,7 @@ def uniformity_tests(df, H):
             lambda g: g[col].corr(g["opa_gross_building"], method="spearman"),
             include_groups=False).dropna()
         rows.append({"surface": name,
-                     "test": "Rank corr. of land value with building value, same zone and lot-size band",
+                     "test": "Land--building rank corr., same zone and lot band",
                      "n": len(rho), "value": rho.median()})
         H.add(f"Uni{name}BuildingCorr", rho.median(), lambda x: f"{x:.2f}")
     H.add("UniCells", int(cells.groupby(["gma3", "area_band"]).ngroups), num)
@@ -279,7 +507,12 @@ def uniformity_tests(df, H):
         "LYCD, raw": [f"{v:.2f}" for v in pick("LYCD")["value"].values],
         "LYCD, re-split": [f"{v:.2f}" for v in pick("Resplit")["value"].values],
     })
-    save_table(TABLES / "uniformity.tex", out, col_format="X r r r r", escape=False)
+    fmt = "X r r r r"
+    if "Stwo" in set(tbl.surface):
+        out["Sales, raw"] = [f"{v:.2f}" for v in pick("Stwo")["value"].values]
+        out["Sales, re-split"] = [f"{v:.2f}" for v in pick("StwoResplit")["value"].values]
+        fmt = "X r r r r r r"
+    save_table(TABLES / "uniformity.tex", out, col_format=fmt, escape=False)
     return d
 
 
@@ -300,7 +533,12 @@ def default_ratio_collapse(df, H):
     at20_lycd = 100 * r_lycd.between(0.1995, 0.2005).mean()
     H.add("DefaultRatioOpaPct", at20_opa, pct)
     H.add("DefaultRatioLycdPct", at20_lycd, pct)
+    if "s2_alloc_land" in d.columns:
+        r_s2 = (d["s2_alloc_land"] / d["market_value"]).round(4)
+        H.add("DefaultRatioStwoPct", 100 * r_s2.between(0.1995, 0.2005).mean(), pct)
+        H.add("StwoResplitLandShareMedian", r_s2.median(), lambda x: f"{x:.2f}")
     H.add("DefaultRatioImprovedParcels", len(d), num)
+    H.add("ImprovedSharePct", 100 * len(d) / len(df), pct)
     # The modal bin width matters for the claim: report the top mode of each surface.
     H.add("DefaultRatioOpaMode", r_opa.mode().iloc[0], lambda x: f"{x:.2f}")
     return r_opa, r_lycd
@@ -605,10 +843,18 @@ def fig_default_ratio(r_opa, r_lycd):
 def main():
     df, rat, met = load()
     H = Headlines(prefix=PREFIX, out_path=TABLES / "headlines.tex")
+    s2 = load_s2()
+    H.add("HasStwo", "yes" if s2 is not None else "no")
+    if s2 is not None:
+        cols = s2["export"][["parcel_id", "lycd_land_value", "alloc_land"]].rename(
+            columns={"lycd_land_value": "s2_land", "alloc_land": "s2_alloc_land"})
+        df = df.merge(cols, on="parcel_id", how="left")
 
     b, moved = scenario_c(df, H)
     scenario_a(df, H)
     d = uniformity_tests(df, H)
+    if s2 is not None:
+        s2_section(df, s2, H)
     r_opa, r_lycd = default_ratio_collapse(df, H)
     sales_test(rat, H)
 

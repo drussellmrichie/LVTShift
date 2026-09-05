@@ -62,7 +62,15 @@ across \LycdUniCells{} zone-and-lot-size cells), while the raw allocation gives 
 \LycdUniLYCDVacantImprovedRatio{} the land rate of the identical improved lot beside it. The
 re-split inherits the better half of each. What it cannot do is make land values \emph{accurate}
 on the one class where accuracy can be checked against sales, and the ordinance's accuracy
-report would say so in its first year.
+report would say so in its first year. A second analysis asks whether anything can. Built from
+\LycdWitN{} land sales --- bare lots, lots sold bare and since built on, and teardowns --- and
+scored held-out, a land surface that simply interpolates among those sales is less dispersed
+than OPA's land values by \LycdStwoVsSzeroDiffAbs{} COD and less dispersed than a published rate
+schedule built from the same sales by \LycdStwoVsSthreeDiffAbs{}; the schedule is
+indistinguishable from OPA. Swapped into the same tax model, the sales-based surface reverses the sign of the
+ordinance's fiscal effect --- the levy \LycdStwoCLevySign{} by \LycdStwoCLevyAbsM{} rather than
+falling --- which is the honest answer to the drafting notes' question: the direction depends
+on the land model, and the one the sales support goes the other way.
 \end{abstract}
 
 \section{The question}
@@ -336,7 +344,7 @@ exactly what makes the next test come out differently.
   parcels. ``LYCD, raw'' is the allocation as the method publishes it; ``LYCD, re-split'' is
   what the ordinance would certify, with each parcel's land capped at its own total.}
   \label{tab:uniformity}
-  \input{tables/uniformity.tex}
+  {\small\input{tables/uniformity.tex}}
 \end{table}
 
 Table~\ref{tab:uniformity} is the center of this report. The ordinance says the land
@@ -424,6 +432,7 @@ multiplier of \LycdLycdKImproved{} is right. It is not proof: a vacant lot and a
 same zone are not the same lot, and the dispersion behind that aggregate is large. But it is
 what the ordinance's Section~4(d) asks for when direct evidence is thin --- an evaluation with
 its basis stated --- and it is the natural first entry in OPA's first land value accuracy report.
+Section~\ref{sec:sales} goes further and builds the surface those sales support.
 
 \subsection{Section 3(c): the identity}
 
@@ -431,6 +440,187 @@ The re-split satisfies Section~3(c) by construction; land plus building equals O
 every parcel, to the cent, and the modeling asserts it. The revaluation does not
 (Section~\ref{sec:reval}). Any proposal that ``adds'' a land value to OPA's building is outside
 the ordinance whatever land value it uses.
+
+\section{A land surface built from the sales}\label{sec:sales}
+
+The zone-rate allocation is the least you can do. The question it leaves open is whether
+doing more --- building the land component from land sales, as the ordinance's Section~3(d)
+contemplates --- produces something measurably closer to ``the market value of the land as if
+vacant,'' and if so in what form. This section reports a second analysis, built in the
+sibling \texttt{philly\_open\_avmkit} repository and scored there against the sales, then
+swapped into the tax model above.\footnote{\texttt{notebooks/pipeline/run\_land\_surfaces.py};
+its generated comparison is \texttt{out/land/report.md}. LVTShift consumes the per-parcel rate
+through \texttt{paint\_land\_surface} and re-runs \texttt{model\_lycd\_reassessment.ipynb} with
+\texttt{LVT\_LAND\_SURFACE=s2\_k20}, so every tax-side figure for the new surface comes through
+exactly the code path the LYCD figures did.}
+
+\subsection{The evidence, and what was missing from it}
+
+\begin{table}[t]
+  \centering
+  \caption{Three streams of land-price evidence, time-adjusted to the valuation date and
+  filtered identically (single-parcel deeds, no building footprint on a recorded-vacant lot,
+  plausible \$/sqft).}
+  \label{tab:witnesses}
+  \input{tables/witness_streams.tex}
+\end{table}
+
+Every sales test so far --- Section~\ref{sec:standards}'s included --- used lots that are
+vacant \emph{today}, because that is the only sample OPA's category code can give you. It is
+the wrong sample for the question. The pipeline's ``vacant sale'' flag is current status joined
+at download, not status at the time of sale, so a lot that sold bare and has since been built
+on is invisible to every vacant-land model. Recovering those sales from the building's
+construction year, and adding teardowns (an improved parcel bought and demolished within a
+year, identified from L\&I demolition permits), gives three streams under one set of filters
+(Table~\ref{tab:witnesses}). They disagree by a factor of \LycdWtwoOverWone{}, and they
+disagree in a direction that matters. Land nobody built on sells for \LycdWonePsf{} a square
+foot at the median; land somebody bought to build on, \LycdWonebPsf{}; land somebody bought
+to clear, \LycdWtwoPsf{}. The second and third are independent evidence --- different sales,
+different signals --- and they land within a third of each other, well above the first. A
+surface fitted only to still-vacant sales is fitted to the land nobody wanted, and
+\LycdImprovedSharePct{} of the roll is parcels somebody did.
+
+\subsection{Interpolation against a schedule}
+
+\begin{table}[t]
+  \centering
+  \caption{Held-out accuracy against \LycdHeldoutN{} land sales, all three streams pooled.
+  Five folds assigned by parcel; the interpolation and the schedule are refitted inside each
+  fold. The COD is trimmed of the outer 5\% of ratios at each end and applied identically to % noqa: hardcode
+  every surface; the raw figure is the same statistic on every row. The Kolbe extraction was
+  calibrated on these sales and is an in-sample upper bound.} % noqa: hardcode
+  \label{tab:heldout}
+  \input{tables/heldout.tex}
+\end{table}
+
+Two surfaces were built from the same witnesses. The first interpolates: each parcel's land
+rate is a distance-weighted average of the log \$/sqft of its twenty nearest sales, the
+neighbourhood size that held-out accuracy selected.\footnote{Held-out dispersion falls
+monotonically to $k=20$ and is flat to $k=40$; $k=80$ and $k=160$ are measurably worse. % noqa: hardcode
+Twenty is the least smoothing that captures the full gain.}
+The second is a schedule: the same evidence pooled into a weighted median rate per market
+area, cascading from OPA's finest zones (a median of two witnesses each) to its 84 second-level % noqa: hardcode
+areas where the finest are too thin, times lot area, times a fitted size elasticity and a
+sub-minimum-lot adjustment --- the form Section~\ref{sec:language} argued an assessor could
+publish. Table~\ref{tab:heldout} scores both against the sales they were not fitted to,
+alongside the surfaces that never saw the sales at all.
+
+\begin{table}[t]
+  \centering
+  \caption{Head to head. Every surface predicts the same held-out rows, so the comparison is
+  paired and the rows' shared difficulty cancels; the interval is a bootstrap over parcels. A
+  negative difference means the first surface is the less dispersed.}
+  \label{tab:h2h}
+  \input{tables/head_to_head.tex}
+\end{table}
+
+Interpolation wins, and the schedule does not. The interpolated surface's trimmed COD is
+\LycdStwoTrCod{}, against \LycdSzeroTrCod{} for OPA's land values and \LycdSthreeTrCod{} for
+the schedule; paired (Table~\ref{tab:h2h}), it beats the schedule by \LycdStwoVsSthreeDiffAbs{}
+COD and OPA by \LycdStwoVsSzeroDiffAbs{}, with intervals that exclude zero in both cases, while
+the schedule against OPA is \LycdSthreeVsSzeroDiff{} with an interval that straddles it. The
+zone-rate allocation is \LycdSzeroVsSoneDiffAbs{} COD worse than OPA. So the published-schedule form, which
+Section~\ref{sec:language} defended on appealability grounds, costs real accuracy and buys no
+more than the assessor already has; the surface that simply averages nearby sales is the
+best of the five.
+
+\begin{table}[t]
+  \centering
+  \caption{Trimmed held-out COD by evidence stream. Where each surface does its work.}
+  \label{tab:bystream}
+  \input{tables/heldout_by_stream.tex}
+\end{table}
+
+Where the gain comes from is in Table~\ref{tab:bystream}. On still-vacant lots OPA and the
+interpolation tie at \LycdSzeroTrCodWone{} and \LycdStwoTrCodWone{}; OPA's land values
+were, in effect, tuned to that sample. On lots that were then built on, and on teardowns,
+the interpolation is at \LycdStwoTrCodWoneb{} and \LycdStwoTrCodWtwo{} against OPA's
+\LycdSzeroTrCodWoneb{} and \LycdSzeroTrCodWtwo{}. The improvement is entirely on the land
+under things people build --- the land the ordinance is about.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{s2_surface.pdf}
+  \caption{Left: held-out trimmed COD by surface; the dashed line is IAAO's standard of
+  \LycdIaaoCod{}. Right: the sales-based surface divided by the zone-rate allocation, summed
+  by Census tract, on a log scale --- red where the sales price land above the allocation.}
+  \label{fig:s2}
+\end{figure}
+
+None of this is IAAO-grade, and the report would be wrong to say so. Net of the estimated
+transaction-noise floor, the interpolated surface's residual dispersion is
+\LycdStwoNetLo{}--\LycdStwoNetHi{}, which brackets the standard of \LycdIaaoCod{} --- but
+that correction rests on 127 repeat sales of vacant lots in a sibling study, is applied here to a % noqa: hardcode
+pooled sample it was not measured on, sits on top of trimming that already removed some of
+the same noise, and lifts every surface: OPA nets to \LycdSzeroNetLo{}--\LycdSzeroNetHi{} by
+the same arithmetic. Read it as a lower bound on how dispersed the surface is, not as a
+measurement. The claim that survives is the paired one: on this evidence, interpolating among
+land sales is measurably better than both the assessor and the schedule, and nothing yet
+built is within the standard.
+
+\subsection{What it does to the roll}
+
+Painted onto every parcel --- the rate imported, this notebook's own lot area applied ---
+the sales-based surface puts \LycdStwoLandBaseB{} of land on the roll, against
+\LycdLycdLandBaseB{} for the zone-rate allocation and \LycdOpaLandBaseB{} for OPA:
+\LycdStwoOverOpaLand{} the assessor's land, \LycdStwoOverLycdLand{} the allocation's. The
+citywide total barely moves between the two model surfaces. Where it sits does
+(Figure~\ref{fig:s2}, right): the sales price land above the allocation across North and
+West Philadelphia and below it in the Northeast and the far Southwest, because the
+allocation's fifth-of-total rule follows house values and the sales do not.
+
+Three things about the swap need saying before its results are read. First,
+\LycdStwoKnnParcels{} parcels (\LycdStwoKnnValuePct{} of market value) are not in the AVM
+universe the surface was built on; they take the median rate of their nearest matched
+neighbours, at a median of \LycdStwoKnnFillPsf{} a square foot against \LycdStwoJoinedPsf{}
+for joined parcels, because they sit disproportionately in Center City. Second, the
+improved-parcel cap binds hard: before it, the surface's land \emph{alone} exceeds OPA's
+total assessment on \LycdStwoPreCapExceeds{} improved parcels, by \LycdStwoCapRemovedB{} in
+aggregate. \LycdStwoPreCapExceedsCondo{} of those are the known lot-area artifact (a
+condominium unit inheriting a whole lot's area); the remaining \LycdStwoPreCapExceedsCore{}
+(\LycdStwoPreCapExceedsCorePct{} of improved parcels with a lot of their own,
+\LycdStwoCapRemovedCoreB{}) are parcels whose land, at what nearby land sells for, is worth
+more than OPA says the whole property is. Under Section~3(c) that is a finding about the
+totals, and it is the first concrete estimate of how many of them a sales-based land standard
+would put under pressure. Third, on the uniformity tests
+(Table~\ref{tab:uniformity}, last two columns) the raw sales surface passes the sentence the
+other two fail: vacant and improved lots at the same rate by construction
+(\LycdUniStwoVacantImprovedRatio{}), abated parcels at \LycdUniStwoAbatedRatio{} their
+neighbours', and a correlation with the building of \LycdUniStwoBuildingCorr{}; the
+re-split version's \LycdUniStwoResplitVacantImprovedRatio{} on the first test is, again,
+OPA's vacant values showing through the cap.
+
+Then the fiscal note, and it reverses. Under the re-split with the sales-based surface,
+\LycdStwoCMoved{} bills move (\LycdStwoCMovedPct{}, still all abatement-type relief, still
+asserted on every run), but the levy \LycdStwoCLevySign{} by \LycdStwoCLevyAbsM{}
+(\LycdStwoCLevyPct{}) where under the allocation it fell by \LycdCLevyAbsM{}. The zone-rate
+allocation priced abated parcels' land \emph{below} OPA's inflated fifth-of-total because a
+market-area median is dominated by older stock; the sales price it \emph{above}, because
+teardowns and lots that then got built on are the evidence, and they sit exactly where the
+abated construction is. Within the abated cohort the median bill still edges down
+(\LycdStwoCAbatedMedianPct{}) while the aggregate rises --- the effect is concentrated in
+the most valuable new construction. This is what the drafting notes asked a fiscal note to
+model in both directions, and the answer is that the direction is a property of the land
+model, not of the ordinance: the model the sales support raises the levy. Under the
+revaluation reading, the sales-based surface also retires the vacant-land pile-on that made
+that reading unusable with the allocation --- vacant lots' median bill moves
+\LycdStwoAVacantMedianPct{} rather than \LycdAVacantMedianPct{}, and they account for
+\LycdStwoAVacantShareOfShift{} of the increases rather than \LycdAVacantShareOfShift{}.
+
+\subsection{What this means for the form}
+
+Section~\ref{sec:language} defends the schedule on the grounds that an appeal can contest a
+rate but not a model. The paired result above says the schedule costs \LycdStwoVsSthreeDiffAbs{}
+COD for that, and the defence was too strong in any case. A parcel's interpolated land rate
+is a weighted average of twenty named sales, and a list of comparable sales with their weights
+is the most familiar form of appeal evidence there is --- it is what a fee appraiser brings to
+the Board. The sibling repository writes that list for every parcel.\footnote{
+\texttt{out/land/s2\_witnesses.parquet}: twenty rows per parcel, each naming the sale, its
+kind, its time-adjusted \$/sqft and its weight.} Section~3(d) already permits ``location value
+response surfaces or comparable spatial models,'' and Section~5 requires publication of the
+values, not of a rule. The right published form, on this evidence, is the surface with its
+comparables --- and the schedule, if one is wanted, is something derived from it for
+readability, not the thing that is certified.
 
 \section{What the ordinance should say}\label{sec:language}
 
@@ -467,6 +657,15 @@ where the actual gap is: a market-area rate derived from total values is an allo
 ordinance's list of recognized methods is right that an allocation is where you start, not
 where you finish.
 
+Section~\ref{sec:sales} adds a fourth point, about what comes after the interim. The
+amendment above permits the allocation as a first step; it should not be read as preferring
+the schedule form for the second. A land surface interpolated from sales, published with each
+parcel's comparables, is already a recognized method under Section~3(d), satisfies
+Section~5 as written, and is measurably closer to the standard than any schedule this
+analysis could build from the same sales. The regulations under Section~6 should say so
+plainly: a per-parcel value with its supporting sales is a publishable, appealable land
+component, and a rate table is a convenience derived from it.
+
 \section{Caveats}
 
 \begin{enumerate}
@@ -489,11 +688,26 @@ where you finish.
   than OPA's abated-parcel land values.} The case for that is that \LycdAbatedAtDefaultPct{} of
   those values are the default ratio applied to a new building. The case against is that a
   market-area median is dominated by older stock and may understate land where new construction
-  is concentrated. The re-split lowers the levy by \LycdCLevyAbsM{}; a land model that resolved that question
-  could move it either way, and the ordinance's own accuracy report is the instrument for
-  resolving it.
+  is concentrated. Section~\ref{sec:sales} resolves it: with land priced from sales, the
+  re-split raises the levy by \LycdStwoCLevyAbsM{} instead of lowering it by \LycdCLevyAbsM{}.
+  The allocation's fiscal note is an artifact of its rate source, and the ordinance's own
+  accuracy report is the instrument that would have shown that.
 \item \textbf{One vintage.} Everything here is the TY\LycdTaxYear{} certified roll and sales
   through mid-2026. The ordinance takes effect for TY2028.
+\item \textbf{The sales-based surface rests on \LycdWitN{} sales spread over 613 market % noqa: hardcode
+  areas.} Both fitted surfaces resolve at the second-level areas almost everywhere; a
+  difference between them is a difference in kernel, not in evidence. Lots that sold bare and
+  were then built on are found from the building's construction year, so recent sales of that
+  kind have not had time to show up and the stream is weighted toward older sales. Teardowns
+  use a one-year window; widening it adds teardowns and barely moves their median, so the
+  level finding does not depend on it. \LycdWitSubMinPct{} of the witnesses are sub-minimum lots, kept
+  because they sell for \emph{more} per square foot than buildable ones, not less. % noqa: hardcode
+\item \textbf{A fifth of market value is painted by nearest neighbour, and the cap removes
+  \LycdStwoCapRemovedB{}.} Neither is a property of the surface. The first is the AVM
+  universe's coverage; the second is the lot-area artifact on condominium units plus
+  \LycdStwoPreCapExceedsCore{} parcels whose totals the sales say are too low. Both are
+  reported rather than fixed here, and both bound what can be claimed about the surface's
+  effect on the roll.
 \end{enumerate}
 
 \section{What the minimal change buys, and what it does not}
@@ -512,21 +726,32 @@ reassessment cycle rather than several.
 What it does not do is make land values accurate, and the ordinance would find that out in
 year one. On the one class where a land value can be checked against a sale price, the
 certified surface would carry OPA's \LycdSalesOPAAgg{}, and nothing in the zone-rate
-construction can move it. The sales that show that also show the way forward: a market-area
-rate estimated from vacant and teardown sales rather than from total values, published in the
-same schedule form --- rate, times area, times listed adjustments --- so that an appeal can
-contest a number rather than a model. That is the second analysis this one points to, and it is
-the one the ordinance, amended as above, would require OPA to produce a plan for.
+construction can move it.
+
+The second analysis says what can. The sales exist --- \LycdWitN{} of them once the lots that
+were built on and the buildings that were torn down are counted, which no vacant-land test
+had done --- and a surface that does nothing cleverer than average the nearest twenty is
+already closer to the standard than the assessor, the allocation, or a schedule built from
+the same sales. It is not within the standard, and its effects on the roll come with two
+qualifications that are really findings about the roll: a fifth of market value it cannot see
+directly, and \LycdStwoPreCapExceedsCore{} parcels whose land, at what land sells for nearby,
+is worth more than OPA says the whole property is. Its fiscal note points the other way from
+the allocation's, which settles the drafting notes' question in the least convenient manner
+--- the sign depends on the land model, and the better model raises the levy.
 
 Philadelphia has assessed land for as long as it has assessed property and has never once
 tested whether the land numbers mean anything. The minimal change makes them mean
 \emph{something} --- a lot's location and size --- at almost no cost to anyone's bill. The
-ordinance's accuracy report is what will make them mean the right thing.
+sales make them mean what the ordinance says they should. The accuracy report it requires is
+the instrument that will tell the two apart every year, and this is what its first edition
+would look like.
 
 \paragraph{Reproducibility.} Every number, table, and figure in this report is generated by
 one script in the LVTShift repository, \path{paper/scripts/generate_paper_assets.py}, from
-two tracked artifacts: the per-parcel export of
-\path{cities/philadelphia/model_lycd_reassessment.ipynb} and the table written by
-\path{scripts/vacant_land_ratio_study.py}. Rebuild with a single command.
+tracked artifacts: the per-parcel exports of
+\path{cities/philadelphia/model_lycd_reassessment.ipynb} under each land surface, the table
+written by \path{scripts/vacant_land_ratio_study.py}, and the witness, score and head-to-head
+files written by \path{philly_open_avmkit/notebooks/pipeline/run_land_surfaces.py}. Rebuild
+with a single command.
 
 \end{document}

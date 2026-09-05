@@ -22,6 +22,7 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
            "LandReallocation", "reallocate_land_within_total",
+           "LandSurfaceResult", "paint_land_surface",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES"]
 
 
@@ -236,6 +237,40 @@ PHILADELPHIA_LAND_SQFT = 134.2 * 27_878_400
 VACANT_CATEGORY_CODES = ("6", "12", "13")
 
 
+def _parcel_coords(gdf) -> "np.ndarray":
+    """Parcel centroids in metres (EPSG:3857), the frame every KNN step in this module uses."""
+    import numpy as np
+
+    geom = gdf.geometry.to_crs("EPSG:3857")
+    if (geom.geom_type != "Point").any():
+        geom = geom.centroid
+    return np.column_stack([geom.x.values, geom.y.values])
+
+
+def _knn_median_fill(coords: "np.ndarray", values: "np.ndarray", k: int) -> "np.ndarray":
+    """Fill NaN entries of `values` with the median over the `k` nearest non-NaN parcels.
+
+    Used for a lot AREA and for a $/sqft RATE, never for a dollar land value: a parcel's own
+    size must still determine its own land value when its rate comes from a spatial smooth
+    (audit 2026-08-08 finding 5).
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    values = np.asarray(values, dtype=float)
+    have = ~np.isnan(values)
+    need = np.isnan(values)
+    if need.sum() == 0 or have.sum() == 0:
+        return values
+    tree = cKDTree(coords[have])
+    _, ix = tree.query(coords[need], k=min(k, int(have.sum())), workers=-1)
+    if ix.ndim == 1:
+        ix = ix[:, None]
+    filled = values.copy()
+    filled[need] = np.median(values[have][ix], axis=1)
+    return filled
+
+
 @dataclass(frozen=True)
 class LycdResult:
     """Output of `compute_lycd_land_values`: the frame with LYCD columns, plus diagnostics."""
@@ -394,22 +429,10 @@ def compute_lycd_land_values(
         index=out.index,
     )
 
-    geom = out.geometry.to_crs("EPSG:3857")
-    if (geom.geom_type != "Point").any():
-        geom = geom.centroid
-    coords = np.column_stack([geom.x.values, geom.y.values])
+    coords = _parcel_coords(out)
 
     def _knn_median(values: np.ndarray) -> np.ndarray:
-        values = np.asarray(values, dtype=float)
-        have = ~np.isnan(values)
-        need = np.isnan(values)
-        if need.sum() == 0:
-            return values
-        tree = cKDTree(coords[have])
-        _, ix = tree.query(coords[need], k=min(knn_k, int(have.sum())), workers=-1)
-        filled = values.copy()
-        filled[need] = np.median(values[have][ix], axis=1)
-        return filled
+        return _knn_median_fill(coords, values, knn_k)
 
     n_area_knn = int(area.isna().sum())
     area = pd.Series(_knn_median(area.values), index=out.index)
@@ -537,6 +560,128 @@ def compute_lycd_land_values(
         "cap_include_building": cap_include_building,
     }
     return LycdResult(out, diagnostics)
+
+
+@dataclass(frozen=True)
+class LandSurfaceResult:
+    """Output of `paint_land_surface`. Series aligned to the input frame's index."""
+    psf: "pd.Series"            # $/sqft actually used, after the KNN fill
+    land_value: "pd.Series"     # psf x LVTShift's own lot area, improved parcels capped
+    source: "pd.Series"         # 'surface' (joined) | 'knn' (filled from matched neighbours)
+    diagnostics: dict
+
+    def describe(self) -> str:
+        d = self.diagnostics
+        return (
+            f"land surface '{d['label']}': {d['n_matched']:,} parcels joined "
+            f"({d['match_rate']:.1%}); {d['n_knn']:,} filled by {d['knn_k']}-NN rate "
+            f"(carrying {d['knn_value_share']:.1%} of market value) | "
+            f"improved cap: {d['n_capped']:,} parcels, "
+            f"${d['land_base_pre_cap']/1e9:.2f}B -> ${d['land_base_post_cap']/1e9:.2f}B "
+            f"({d['cap_removed_share']:.1%} removed) | "
+            f"land > total on {d['n_land_exceeds_total']:,} improved parcels before the cap"
+        )
+
+
+def paint_land_surface(
+    gdf,
+    surface,
+    *,
+    rate_col: str,
+    parcel_col: str = "parcel_number",
+    area_col: str = "dor_area_sqft",
+    knn_k: int = 5,
+    cap_improved_at_market: bool = True,
+    vacant_codes=VACANT_CATEGORY_CODES,
+    label: "str | None" = None,
+) -> LandSurfaceResult:
+    """Paint an externally estimated land $/sqft surface onto LVTShift's parcel frame.
+
+    The surface comes from `philly_open_avmkit`'s `run_land_surfaces.py`
+    (`out/land/land_surfaces_ty2026.csv`): one row per parcel in that repo's AVM universe with
+    several candidate land rates. This function is the seam the roadmap's repo boundary
+    describes -- the sibling repo answers "what is a square foot of land worth here," LVTShift
+    answers "what does that do to the tax base" -- and it deliberately imports a RATE, not a
+    dollar value, so that LVTShift's own lot-area convention (`compute_lycd_land_values`'s
+    `dor_area_sqft` chain) decides every parcel's land value. The two repos' areas agree within
+    5% on 99.9% of joined parcels, but a rate keeps them decoupled by construction.
+
+    Coverage is the reason this is a function and not a merge. 55,351 of LVTShift's TY2026
+    parcels (22% of market value) are not in the AVM universe at all, so an inner join would
+    silently drop a fifth of the roll. Unmatched parcels take the median rate of their
+    `knn_k` nearest matched neighbours -- the same `_knn_median_fill` LYCD uses for parcels
+    outside GMA coverage -- and are flagged `source == 'knn'` so the report can say how much
+    of the base rests on the fill.
+
+    The improved-parcel cap follows LYCD's convention exactly (land clipped at
+    `market_value`, vacant parcels uncapped) so that a surface swapped in through this
+    function changes one thing -- the rate -- and nothing else about how the notebooks treat
+    it. `n_land_exceeds_total` counts how often the surface's land alone exceeds OPA's total
+    assessment before the cap binds: under the draft ordinance's Sec. 3(c) that is not a
+    permitted assessment, so it is a finding about the totals, and the report needs the count.
+
+    Parameters
+    ----------
+    gdf : GeoDataFrame
+        Needs `parcel_col`, `category_code`, `market_value`, `area_col` (run
+        `compute_lycd_land_values` first) and point geometry.
+    surface : DataFrame
+        `parcel_col` (any zero-padding; normalised to 9 digits) and `rate_col` in $/sqft.
+    rate_col : str
+        Which candidate to paint, e.g. `'s2_k20'`.
+    """
+    import numpy as np
+    import pandas as pd
+
+    label = label or rate_col
+    out_index = gdf.index
+    keys = gdf[parcel_col].astype(str).str.strip().str.zfill(9)
+
+    s = surface[[parcel_col, rate_col]].copy()
+    s[parcel_col] = s[parcel_col].astype(str).str.strip().str.zfill(9)
+    s[rate_col] = pd.to_numeric(s[rate_col], errors="coerce")
+    s = s.dropna(subset=[rate_col]).drop_duplicates(parcel_col).set_index(parcel_col)[rate_col]
+
+    psf = pd.Series(keys.map(s).to_numpy(dtype=float), index=out_index)
+    matched = psf.notna()
+    coords = _parcel_coords(gdf)
+    psf_filled = pd.Series(_knn_median_fill(coords, psf.to_numpy(), knn_k), index=out_index)
+    source = pd.Series(np.where(matched, "surface", "knn"), index=out_index)
+
+    area = pd.to_numeric(gdf[area_col], errors="coerce")
+    market = pd.to_numeric(gdf["market_value"], errors="coerce")
+    cat = pd.to_numeric(gdf["category_code"].astype(str).str.strip(), errors="coerce").astype("Int64").astype(str)
+    is_vac = cat.isin(set(str(c) for c in vacant_codes))
+
+    land = (psf_filled * area).clip(lower=0).fillna(0.0)
+    pre_cap = float(land.sum())
+    mv = market.fillna(0).clip(lower=0)
+    exceeds = (land > mv) & ~is_vac & (mv > 0)
+    n_capped = 0
+    if cap_improved_at_market:
+        n_capped = int(exceeds.sum())
+        land = pd.Series(np.where(~is_vac, np.minimum(land, mv), land), index=out_index)
+    post_cap = float(land.sum())
+
+    mv_total = float(mv.sum())
+    diagnostics = {
+        "label": label,
+        "rate_col": rate_col,
+        "n_parcels": int(len(gdf)),
+        "n_matched": int(matched.sum()),
+        "match_rate": float(matched.mean()),
+        "n_knn": int((~matched).sum()),
+        "knn_k": knn_k,
+        "knn_value_share": float(mv[~matched].sum() / mv_total) if mv_total else float("nan"),
+        "n_capped": n_capped,
+        "n_land_exceeds_total": int(exceeds.sum()),
+        "land_base_pre_cap": pre_cap,
+        "land_base_post_cap": post_cap,
+        "cap_removed_share": (pre_cap - post_cap) / pre_cap if pre_cap > 0 else float("nan"),
+        "median_psf_matched": float(psf[matched].median()) if matched.any() else float("nan"),
+        "median_psf_knn": float(psf_filled[~matched].median()) if (~matched).any() else float("nan"),
+    }
+    return LandSurfaceResult(psf_filled, land, source, diagnostics)
 
 
 @dataclass(frozen=True)

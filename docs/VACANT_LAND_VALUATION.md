@@ -104,6 +104,29 @@ it look, and the honest form is a direction, not a specific stopping point: the 
 `phi ~ 0.85` is not derived from these numbers, and deriving one would need a parcel-level
 error distribution this study does not produce.
 
+## What "vacant sales" leaves out (2026-09-05)
+
+Everything above scores the two surfaces against sales of lots that are vacant *today*. That is
+the only sample OPA's category code can give you, and it turned out to be the wrong sample for
+the question the ordinance asks. `philly_open_avmkit`'s land-surface harness
+(`notebooks/pipeline/run_land_surfaces.py`; generated report in `out/land/report.md`)
+recovers two further streams of land evidence under the same scrutiny — lots that sold bare
+and have *since been built on* (identified from `bldg_year_built` postdating the sale), and
+improved parcels bought and demolished within a year of the sale (a new L&I demolition-permit
+download). The mechanism finding: the three streams disagree by a factor of about three at the
+median, and in a consistent direction — land nobody built on is the cheapest land in the city,
+and land somebody bought to build on runs two to three times the price per square foot. Two
+independent streams agreeing at roughly the same level, well above the still-vacant one, is
+the strongest part of it.
+
+Read every number in this document with that in mind. The "OPA under-values vacant land"
+finding stands on the still-vacant sample; on the buildable streams OPA's ratio is closer to
+one and LYCD's flips from far too high to too low. The level a land surface should be
+calibrated to is not the still-vacant median, and the sibling harness scores every candidate
+on all three streams, held out. Its headline: interpolating among the sales beats both a
+published rate schedule and OPA's own land values by a measured margin; the schedule is
+indistinguishable from OPA.
+
 ## Limitations
 
 - The script's sales scrutiny is crude next to openavmkit's (a price floor, $/sqft bounds, no

@@ -198,6 +198,44 @@ What makes it usable as the basis of an LVT, beyond accuracy:
   assemblage remnants. These are the population most exposed under full capture, and both
   current surfaces are worst on exactly them.
 
+## Stage B, first pass (2026-09-05): what the sales say about the form
+
+The first sales-based surfaces are built, in `philly_open_avmkit`
+(`notebooks/pipeline/land_surfaces.py`, `run_land_surfaces.py`; generated comparison in
+`out/land/report.md`), and LVTShift consumes them through `lvt.philadelphia.paint_land_surface`
+with `LVT_LAND_SURFACE=<candidate>` on `model_lycd_reassessment.ipynb`. What was learned about
+the *form*, which is what this note is about:
+
+- **The evidence, not the method, was the binding problem.** openavmkit's `vacant_sale` is
+  current OPA status joined at download time, so lots that sold bare and were then built on
+  never reach any vacant model. Recovered alongside teardowns (from a new demolition-permit
+  download), those streams price land at two to three times what still-vacant lots do, and
+  the two agree with each other. The whole Stage A discussion of "calibrate the vacant leg to
+  sales" was calibrating to the wrong sales.
+- **Interpolation beats the schedule form, measurably.** Held out by parcel, with both
+  refitted inside each fold and judged by a paired bootstrap, a Gaussian-kernel kNN over the
+  witnesses' log $/sqft is less dispersed than a per-cell rate schedule built from the same
+  witnesses, and less dispersed than OPA; the schedule is indistinguishable from OPA. The
+  Stage B sketch above assumed the published form would be the schedule. It should be the
+  surface, published with each parcel's comparables (`out/land/s2_witnesses.parquet`) — a
+  comps-based appraisal, which is the most familiar appeal evidence there is, and which
+  § 3(d)'s "location value response surfaces" already permits.
+- **What did not change.** Both fitted surfaces cascade to OPA's L2 market areas almost
+  everywhere, because the finest level has a median of two witnesses per cell. A size
+  adjustment is still needed for the PRD. And nothing here is IAAO-grade: the trimmed
+  dispersion of the best surface sits roughly double the standard, and the net-of-noise range
+  the harness reports is a lower bound that lifts every candidate, OPA included.
+- **Two methodological traps, recorded so they are not re-learned:** COD is a *mean* absolute
+  deviation, so a handful of large tracts transferred for token sums (no lower $/sqft bound)
+  dominated every dispersion figure and made the fold spread five times wider than it is;
+  and candidates must be compared with a paired test, because they all predict the same rows.
+
+Lars's unmerged `upstream/docs_land` branch of openavmkit (May 2026) builds a much more
+elaborate schedule painter — six evidence streams, per-neighbourhood tables with size curves,
+and eleven LVT-specific "Lars-Tests" — but its extraction stream and its reconciliation both
+lean on `assr_impr_value`, which in Philadelphia is a fifth of total value by rule. Its test
+harness imports cleanly and is the natural Phase 3.
+
 ## Repo boundaries
 
 `philly_open_avmkit` owns sales scrutiny, the AVM, the Kolbe decomposition and the ratio-study
