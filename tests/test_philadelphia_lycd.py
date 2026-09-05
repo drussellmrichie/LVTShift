@@ -18,6 +18,7 @@ from lvt.philadelphia import (  # noqa: E402
     compute_lycd_land_values,
     carry_forward_exemptions,
     compute_residual_building_value,
+    reallocate_land_within_total,
 )
 
 
@@ -409,3 +410,214 @@ def test_carry_forward_override_does_not_affect_reconstruction_guard():
                                    gross_building_override=garbage_override)
     assert res.diagnostics["reconstruction_match_rate"] == 1.0
     assert res.diagnostics["used_gross_building_override"] is True
+
+
+# --- reallocate_land_within_total: the assessment-standards reform ------------------------
+# Total assessment and rate both unchanged; only the land/building SPLIT moves. The claim
+# under test throughout: a bill can only move if its exemption depends on that split.
+
+def _realloc(df, new_land, cap=100_000, **kw):
+    return reallocate_land_within_total(
+        df.assign(new_land=new_land), new_land_col="new_land", homestead_cap=cap, **kw)
+
+
+def test_reallocate_reconstructs_opa_base_from_opa_land():
+    df = _exemption_cases()
+    res = _realloc(df, (df.taxable_land + df.exempt_land).values)
+    assert res.diagnostics["reconstruction_match_rate"] == 1.0
+    old = (df.taxable_land + df.taxable_building).clip(lower=0)
+    assert np.allclose(res.alloc_taxable_total, old)
+    assert res.diagnostics["n_taxable_changed"] == 0
+
+
+def test_reallocate_only_split_dependent_exemptions_move():
+    """The headline claim of the reform: with the total and the rate held fixed, the only
+    parcels whose bill moves are those whose exemption is a share of the BUILDING line --
+    the abated ones. Plain, homestead-only, homestead-wiped and institutional rows are all
+    bit-for-bit unchanged no matter how far the land component moves."""
+    df = _exemption_cases()
+    res = _realloc(df, 2 * (df.taxable_land + df.exempt_land).values)
+    old = (df.taxable_land + df.taxable_building).clip(lower=0).values
+    new = res.alloc_taxable_total.values
+
+    moved = np.abs(new - old) > 1
+    assert list(np.flatnonzero(moved)) == [2, 5], "only the two abated rows may move"
+    assert res.diagnostics["n_taxable_changed"] == 2
+
+    # Sec. 3(c): land and improvement stay complementary parts of one unchanged total.
+    gross_total = (df.taxable_land + df.exempt_land + df.taxable_building + df.exempt_building)
+    assert np.allclose(res.alloc_land + res.alloc_building, gross_total)
+
+    # 0 plain: no exemption at all, so the split is invisible to the bill.
+    assert new[0] == pytest.approx(200_000.0)
+    # 1 homestead: min(cap, total) with the total unchanged -> unchanged, only the line it is
+    #   drawn against moves.
+    assert new[1] == pytest.approx(200_000.0)
+    # 3 homestead-wiped: total 80k still under the 100k cap, so it stays exempt -- unlike the
+    #   revaluation reading, where a bigger land value can lift it back into the base.
+    assert new[3] == pytest.approx(0.0)
+    # 4 institutional: fully exempt regardless.
+    assert new[4] == pytest.approx(0.0)
+    # 6 homestead spilling onto land: total unchanged, so unchanged.
+    assert new[6] == pytest.approx(20_000.0)
+
+
+def test_reallocate_fully_abated_taxable_is_land_only():
+    """A 100%-abated parcel exempts whatever the improvement is now assessed at, so its
+    taxable value is exactly the reallocated land component -- raise the land share and it
+    pays more. This is the ordinance's fiscal question, in one row."""
+    df = _exemption_cases()
+    res = _realloc(df, 2 * (df.taxable_land + df.exempt_land).values)
+    # row 2: gross total 340k, land doubled 40k -> 80k, so building 260k, all abated.
+    assert res.alloc_land.iloc[2] == pytest.approx(80_000.0)
+    assert res.alloc_building.iloc[2] == pytest.approx(260_000.0)
+    assert res.alloc_taxable_building.iloc[2] == pytest.approx(0.0)
+    assert res.alloc_taxable_total.iloc[2] == pytest.approx(res.alloc_land.iloc[2])
+    # ...and it moves in the other direction too, which is why a fiscal note needs both.
+    lower = _realloc(df, 0.5 * (df.taxable_land + df.exempt_land).values)
+    assert lower.alloc_taxable_total.iloc[2] == pytest.approx(20_000.0)
+
+
+def test_reallocate_partial_abatement_carries_as_a_share():
+    """Row 5 is 75% abated (300k of a 400k building). The share, not the dollar amount, is
+    what carries -- so the exemption tracks the new building line."""
+    df = _exemption_cases()
+    res = _realloc(df, 2 * (df.taxable_land + df.exempt_land).values)
+    # building 340k after reallocation; 75% of it exempt = 255k, leaving 85k taxable, then the
+    # 100k homestead takes all 85k and spills 15k onto the 120k land line -> 105k.
+    assert res.alloc_building.iloc[5] == pytest.approx(340_000.0)
+    assert res.alloc_taxable_total.iloc[5] == pytest.approx(105_000.0)
+    assert res.exemption_kind.iloc[5] == "building_share"
+
+    # Same 75% abatement without a homestead on top, so the abated dollars are directly
+    # visible rather than buried under the homestead's bite.
+    clean = pd.DataFrame({
+        "taxable_land": [60_000.0], "taxable_building": [100_000.0],
+        "exempt_land": [0.0], "exempt_building": [300_000.0], "homestead_exemption": [0.0],
+    })   # gross: land 60k, building 400k, total 460k, 75% abated
+    out = _realloc(clean, [120_000.0])
+    assert out.alloc_building.iloc[0] == pytest.approx(340_000.0)
+    exempted = out.alloc_building.iloc[0] - out.alloc_taxable_building.iloc[0]
+    assert exempted == pytest.approx(0.75 * 340_000.0)
+    assert out.alloc_taxable_total.iloc[0] == pytest.approx(120_000.0 + 85_000.0)
+
+
+def test_reallocate_partial_institutional_carries_in_dollars():
+    """Row 4's exemption (1.4M) exceeds its building line (900k), so it is relief against
+    total value, not against the improvement -- it carries in dollars and, the total being
+    unchanged, the parcel stays fully exempt."""
+    df = _exemption_cases()
+    res = _realloc(df, 2 * (df.taxable_land + df.exempt_land).values)
+    assert res.exemption_kind.iloc[4] == "full"       # fully exempt today, so 'full' wins
+    assert bool(res.institutional_exempt.iloc[4])
+    assert res.alloc_taxable_total.iloc[4] == pytest.approx(0.0)
+
+    # A partially-relieved (not fully exempt) version of the same shape: exemption exceeds the
+    # building line, so it is total_share and the bill does not move.
+    partial = pd.DataFrame({
+        "taxable_land": [100_000.0], "taxable_building": [50_000.0],
+        "exempt_land": [200_000.0], "exempt_building": [150_000.0],
+        "homestead_exemption": [0.0],
+    })
+    out = _realloc(partial, [300_000.0])
+    assert out.exemption_kind.iloc[0] == "total_share"
+    assert out.alloc_taxable_total.iloc[0] == pytest.approx(150_000.0)   # unchanged
+
+
+def test_reallocate_prorata_relief_is_not_an_abatement():
+    """Relief split across BOTH lines in the parcel's own land/building ratio is a percentage
+    of total value, not an exemption of the improvement -- even though the dollars fit inside
+    the building line. Real TY2026 data has 345 of these; classifying them as building_share
+    would make their relief track a building value that the reform deliberately moves."""
+    prorata = pd.DataFrame({           # 50% relief, applied 20/80 across land and building
+        "taxable_land": [35_180.0], "taxable_building": [140_720.0],
+        "exempt_land": [35_180.0], "exempt_building": [140_720.0],
+        "homestead_exemption": [0.0],
+    })                                  # gross land 70,360 / building 281,440, total 351,800
+    res = _realloc(prorata, [140_000.0])
+    assert res.diagnostics["n_prorata_reclassified"] == 1
+    assert res.exemption_kind.iloc[0] == "total_share"
+    assert res.reform_change.iloc[0] == pytest.approx(0.0), "relief on total value cannot move"
+
+    # The homestead spilling onto land is NOT this pattern -- it must stay building_share.
+    abated_with_spill = pd.DataFrame({
+        "taxable_land": [20_000.0], "taxable_building": [0.0],
+        "exempt_land": [58_900.0], "exempt_building": [235_600.0],
+        "homestead_exemption": [100_000.0],
+    })   # abatement 194,500 of a 235,600 building; the 100k homestead takes the rest and
+         # spills 58,900 onto land -- exactly the exempt_land OPA records.
+    out = _realloc(abated_with_spill, [120_000.0])
+    assert out.diagnostics["n_prorata_reclassified"] == 0
+    assert out.exemption_kind.iloc[0] == "building_share"
+
+
+def test_reallocate_reform_change_excludes_reconstruction_residual():
+    """A parcel whose recorded homestead disagrees with the relief actually applied cannot be
+    reproduced by the rule -- and its bill does not depend on the land/building split, so the
+    reform must report zero for it. Differencing against OPA's recorded total instead would
+    report the rule's own residual as a tax change (1,818 such parcels on TY2026)."""
+    # homestead_exemption records the full 100k cap, but only 25,240 was actually applied.
+    odd = pd.DataFrame({
+        "taxable_land": [75_720.0], "taxable_building": [277_640.0],
+        "exempt_land": [0.0], "exempt_building": [25_240.0],
+        "homestead_exemption": [100_000.0],
+    })
+    # floor lifted because this one-row frame IS the mismatch case under test; on the real
+    # roll these are 0.5% of parcels and the 95% floor holds comfortably.
+    res = _realloc(odd, [200_000.0], reconstruction_floor=0.0)
+    assert res.diagnostics["n_reconstruction_mismatch"] == 1
+    # Against OPA's recorded total this looks like a change; against the rule itself it is zero.
+    recorded_delta = res.alloc_taxable_total.iloc[0] - (odd.taxable_land + odd.taxable_building).iloc[0]
+    assert abs(recorded_delta) > 1
+    assert res.reform_change.iloc[0] == pytest.approx(0.0)
+    assert res.diagnostics["n_taxable_changed"] == 0
+    assert res.diagnostics["n_taxable_changed_vs_recorded"] == 1
+
+
+def test_reallocate_vacant_parcel_never_moves():
+    """Vacant land has no building line to reallocate away from, so the reform cannot touch
+    it -- which is why LYCD's badly over-valued vacant leg is irrelevant to this scenario."""
+    vacant = pd.DataFrame({
+        "taxable_land": [30_000.0], "taxable_building": [0.0],
+        "exempt_land": [0.0], "exempt_building": [0.0], "homestead_exemption": [0.0],
+    })
+    res = _realloc(vacant, [500_000.0])       # LYCD-sized over-valuation
+    assert res.alloc_land.iloc[0] == pytest.approx(30_000.0)
+    assert res.alloc_building.iloc[0] == pytest.approx(0.0)
+    assert res.alloc_taxable_total.iloc[0] == pytest.approx(30_000.0)
+    assert res.diagnostics["n_taxable_changed"] == 0
+
+
+def test_reallocate_caps_land_at_the_parcel_total():
+    """A land component above the parcel's own total assessment is capped there (the
+    structure is then implicitly worth zero); the total, and an unexempted bill, still do
+    not move."""
+    df = _exemption_cases()
+    res = _realloc(df, np.full(len(df), 10_000_000.0))
+    gross_total = (df.taxable_land + df.exempt_land + df.taxable_building + df.exempt_building)
+    assert np.allclose(res.alloc_land, gross_total)
+    assert np.allclose(res.alloc_building, 0.0)
+    assert res.diagnostics["n_land_capped"] == len(df)
+    assert res.alloc_taxable_total.iloc[0] == pytest.approx(200_000.0)   # plain row unmoved
+
+
+def test_reallocate_exemption_kinds():
+    df = _exemption_cases()
+    res = _realloc(df, (df.taxable_land + df.exempt_land).values)
+    assert list(res.exemption_kind) == [
+        "none", "homestead", "building_share", "homestead", "full", "building_share", "homestead",
+    ]
+    assert res.diagnostics["exemption_kind_counts"]["building_share"] == 2
+
+
+def test_reallocate_reconstruction_floor_raises():
+    df = _exemption_cases()
+    with pytest.raises(ValueError, match="reproduces OPA's taxable total"):
+        _realloc(df, (df.taxable_land + df.exempt_land).values,
+                 cap=10_000, reconstruction_floor=0.99)
+
+
+def test_reallocate_requires_homestead_column():
+    df = _exemption_cases().drop(columns=["homestead_exemption"])
+    with pytest.raises(ValueError, match="homestead_exemption"):
+        _realloc(df, 1.0)

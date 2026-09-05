@@ -21,6 +21,7 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
+           "LandReallocation", "reallocate_land_within_total",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES"]
 
 
@@ -539,6 +540,96 @@ def compute_lycd_land_values(
 
 
 @dataclass(frozen=True)
+class _ExemptionParts:
+    """OPA's recorded values and exemptions, decomposed the way both reform functions need.
+
+    Shared by `carry_forward_exemptions` and `reallocate_land_within_total` so the two cannot
+    disagree about what a parcel's exemptions are; only how they carry into the reform differs.
+    """
+    gross_land: "pd.Series"
+    gross_building: "pd.Series"
+    exempt_land: "pd.Series"
+    exempt_total: "pd.Series"
+    homestead_amount: "pd.Series"
+    old_taxable: "pd.Series"
+    homestead_active: "pd.Series"       # flag set AND an exemption applied this vintage
+    other_exempt: "pd.Series"           # non-homestead exemption dollars (abatement / partial)
+    homestead_wiped: "pd.Series"        # fully exempt today only because the homestead covers it
+    institutional: "pd.Series"          # fully exempt today for a reason the homestead cannot explain
+
+
+def _decompose_exemptions(gdf, homestead_col: str, match_tolerance: float) -> _ExemptionParts:
+    import numpy as np
+    import pandas as pd
+
+    if homestead_col not in gdf.columns:
+        raise ValueError(
+            f"{homestead_col!r} is not in the frame. Rebuild the parcel cache with "
+            "scripts/build_philadelphia_parcel_cache.py --force; the exemption rules key the "
+            "Homestead Exemption off OPA's per-parcel flag."
+        )
+
+    def _num(col):
+        return pd.to_numeric(gdf[col], errors="coerce").fillna(0.0).astype(float)
+
+    tax_land, tax_bldg = _num("taxable_land"), _num("taxable_building")
+    ex_land, ex_bldg = _num("exempt_land"), _num("exempt_building")
+    hs_amt = _num(homestead_col).clip(lower=0)
+    gross_bldg = (tax_bldg + ex_bldg).clip(lower=0)
+    gross_land = (tax_land + ex_land).clip(lower=0)
+    ex_total = ex_land + ex_bldg
+    old_taxable = (tax_land + tax_bldg).clip(lower=0)
+    full_exmp = old_taxable <= 0
+
+    hs_active = (hs_amt > 0) & (ex_total > 0)
+    other_exempt = (ex_total - np.where(hs_active, hs_amt, 0.0)).clip(lower=0)
+    homestead_wiped = full_exmp & hs_active & (other_exempt <= match_tolerance)
+    institutional = full_exmp & ~homestead_wiped
+    return _ExemptionParts(gross_land, gross_bldg, ex_land, ex_total, hs_amt, old_taxable,
+                           hs_active, other_exempt, homestead_wiped, institutional)
+
+
+def _apply_exemptions(new_land, bldg, other_exempt, parts: _ExemptionParts, homestead_cap: float):
+    """Building-first application of the dollar exemptions, then the homestead at min(cap, value).
+
+    `other_exempt` is passed explicitly (rather than read from `parts`) because the two reform
+    functions differ in exactly this: carry-forward keeps the recorded dollars, reallocation
+    re-derives an abatement's dollars from the new building value.
+    """
+    import numpy as np
+    import pandas as pd
+
+    idx = parts.gross_land.index
+    b1 = (bldg - other_exempt).clip(lower=0)
+    spill = (other_exempt - bldg).clip(lower=0)
+    l1 = (new_land - spill).clip(lower=0)
+    hs_ex = pd.Series(np.where(parts.homestead_active, np.minimum(homestead_cap, b1 + l1), 0.0), index=idx)
+    b2 = (b1 - hs_ex).clip(lower=0)
+    spill2 = (hs_ex - b1).clip(lower=0)
+    l2 = (l1 - spill2).clip(lower=0)
+    b2 = b2.where(~parts.institutional, 0.0)
+    l2 = l2.where(~parts.institutional, 0.0)
+    return l2, b2
+
+
+def _reconstruction_guard(parts: _ExemptionParts, rec_land, rec_bldg, match_tolerance: float,
+                          reconstruction_floor: float):
+    """OPA's own values through the rule must reproduce OPA's own taxable total per parcel."""
+    rec_total = rec_land + rec_bldg
+    match = (rec_total - parts.old_taxable).abs() <= match_tolerance
+    match_rate = float(match.mean())
+    if match_rate < reconstruction_floor:
+        raise ValueError(
+            f"Exemption rule reproduces OPA's taxable total on only {match_rate:.2%} of "
+            f"parcels (floor {reconstruction_floor:.0%}). The rule does not describe how this "
+            "vintage's exemptions were applied -- check homestead_cap against the assessment year "
+            "and the homestead flag's vintage before trusting any reform base built on it."
+        )
+    mismatch_dollars = float((rec_total - parts.old_taxable)[~match].abs().sum())
+    return match_rate, mismatch_dollars
+
+
+@dataclass(frozen=True)
 class ExemptionCarryForward:
     """Output of `carry_forward_exemptions`. All Series are aligned to the input index."""
     reform_taxable_land: "pd.Series"
@@ -638,81 +729,38 @@ def carry_forward_exemptions(
     -------
     ExemptionCarryForward
     """
-    import numpy as np
     import pandas as pd
 
-    if homestead_col not in gdf.columns:
-        raise ValueError(
-            f"{homestead_col!r} is not in the frame. Rebuild the parcel cache with "
-            "scripts/build_philadelphia_parcel_cache.py --force; the carry-forward keys the "
-            "Homestead Exemption off OPA's per-parcel flag."
-        )
-
-    def _num(col):
-        return pd.to_numeric(gdf[col], errors="coerce").fillna(0.0).astype(float)
-
-    tax_land, tax_bldg = _num("taxable_land"), _num("taxable_building")
-    ex_land, ex_bldg = _num("exempt_land"), _num("exempt_building")
-    hs_amt = _num(homestead_col).clip(lower=0)
-    gross_bldg = (tax_bldg + ex_bldg).clip(lower=0)
-    gross_land = (tax_land + ex_land).clip(lower=0)
-    ex_total = ex_land + ex_bldg
-    old_taxable = (tax_land + tax_bldg).clip(lower=0)
-    full_exmp = old_taxable <= 0
-
-    hs_active = (hs_amt > 0) & (ex_total > 0)
-    other_exempt = (ex_total - np.where(hs_active, hs_amt, 0.0)).clip(lower=0)
-    homestead_wiped = full_exmp & hs_active & (other_exempt <= match_tolerance)
-    institutional = full_exmp & ~homestead_wiped
-
-    def _apply(new_land: pd.Series, bldg: pd.Series):
-        """Building-first application of the dollar exemptions, then the homestead."""
-        b1 = (bldg - other_exempt).clip(lower=0)
-        spill = (other_exempt - bldg).clip(lower=0)
-        l1 = (new_land - spill).clip(lower=0)
-        hs_ex = pd.Series(np.where(hs_active, np.minimum(homestead_cap, b1 + l1), 0.0), index=gdf.index)
-        b2 = (b1 - hs_ex).clip(lower=0)
-        spill2 = (hs_ex - b1).clip(lower=0)
-        l2 = (l1 - spill2).clip(lower=0)
-        b2 = b2.where(~institutional, 0.0)
-        l2 = l2.where(~institutional, 0.0)
-        return l2, b2
+    p = _decompose_exemptions(gdf, homestead_col, match_tolerance)
 
     # Guard: OPA's own land AND OPA's own building through the same rule must reproduce OPA's
     # own taxable total -- this validates the rule itself, so it never uses the override.
-    rec_land, rec_bldg = _apply(gross_land, gross_bldg)
-    rec_total = rec_land + rec_bldg
-    match = (rec_total - old_taxable).abs() <= match_tolerance
-    match_rate = float(match.mean())
-    if match_rate < reconstruction_floor:
-        raise ValueError(
-            f"Exemption carry-forward reproduces OPA's taxable total on only {match_rate:.2%} of "
-            f"parcels (floor {reconstruction_floor:.0%}). The rule does not describe how this "
-            "vintage's exemptions were applied -- check homestead_cap against the assessment year "
-            "and the homestead flag's vintage before trusting any reform base built on it."
-        )
+    rec_land, rec_bldg = _apply_exemptions(p.gross_land, p.gross_building, p.other_exempt, p, homestead_cap)
+    match_rate, mismatch_dollars = _reconstruction_guard(
+        p, rec_land, rec_bldg, match_tolerance, reconstruction_floor)
 
     new_land = pd.to_numeric(gdf[new_land_col], errors="coerce").fillna(0.0).clip(lower=0)
     if gross_building_override is not None:
         bldg_for_reform = gross_building_override.reindex(gdf.index).fillna(0.0).clip(lower=0).astype(float)
     else:
-        bldg_for_reform = gross_bldg
-    ref_land, ref_bldg = _apply(new_land, bldg_for_reform)
+        bldg_for_reform = p.gross_building
+    ref_land, ref_bldg = _apply_exemptions(new_land, bldg_for_reform, p.other_exempt, p, homestead_cap)
 
     diagnostics = {
-        "n_homestead_active": int(hs_active.sum()),
-        "n_homestead_flag_no_exemption": int(((hs_amt > 0) & (ex_total <= 0)).sum()),
-        "n_other_exempt": int((other_exempt > match_tolerance).sum()),
-        "n_institutional_exempt": int(institutional.sum()),
-        "n_homestead_wiped": int(homestead_wiped.sum()),
-        "n_homestead_wiped_reentering": int((homestead_wiped & ((ref_land + ref_bldg) > 0)).sum()),
+        "n_homestead_active": int(p.homestead_active.sum()),
+        "n_homestead_flag_no_exemption": int(((p.homestead_amount > 0) & (p.exempt_total <= 0)).sum()),
+        "n_other_exempt": int((p.other_exempt > match_tolerance).sum()),
+        "n_institutional_exempt": int(p.institutional.sum()),
+        "n_homestead_wiped": int(p.homestead_wiped.sum()),
+        "n_homestead_wiped_reentering": int((p.homestead_wiped & ((ref_land + ref_bldg) > 0)).sum()),
         "reconstruction_match_rate": match_rate,
-        "reconstruction_mismatch_dollars": float((rec_total - old_taxable)[~match].abs().sum()),
+        "reconstruction_mismatch_dollars": mismatch_dollars,
         "homestead_cap": float(homestead_cap),
         "used_gross_building_override": gross_building_override is not None,
     }
     return ExemptionCarryForward(
-        ref_land, ref_bldg, ref_land + ref_bldg, institutional, hs_active, other_exempt, diagnostics,
+        ref_land, ref_bldg, ref_land + ref_bldg, p.institutional, p.homestead_active,
+        p.other_exempt, diagnostics,
     )
 
 
@@ -795,3 +843,216 @@ def compute_residual_building_value(
     market = pd.to_numeric(gdf[market_value_col], errors="coerce").fillna(0.0).clip(lower=0)
     land = pd.to_numeric(gdf[land_col], errors="coerce").fillna(0.0).clip(lower=0)
     return (market - land).clip(lower=0)
+
+
+@dataclass(frozen=True)
+class LandReallocation:
+    """Output of `reallocate_land_within_total`. All Series are aligned to the input index."""
+    alloc_land: "pd.Series"              # gross (pre-exemption) land after reallocation
+    alloc_building: "pd.Series"          # gross building = OPA's total - alloc_land
+    alloc_taxable_land: "pd.Series"
+    alloc_taxable_building: "pd.Series"
+    alloc_taxable_total: "pd.Series"
+    reconstructed_taxable_total: "pd.Series"   # the SAME rule applied to OPA's own land
+    exemption_kind: "pd.Series"          # none | homestead | building_share | total_share | full
+    institutional_exempt: "pd.Series"
+    diagnostics: dict
+
+    @property
+    def reform_change(self) -> "pd.Series":
+        """The reform's own effect on taxable value, free of the rule's reconstruction error.
+
+        `alloc_taxable_total - reconstructed_taxable_total`, i.e. the same exemption rule applied
+        to the new land component minus that rule applied to OPA's own land. Any error in the
+        rule's description of a parcel's exemptions is present in both terms and cancels exactly.
+        Differencing against OPA's *recorded* taxable total instead would report the rule's
+        residual (0.5% of parcels on TY2026, where OPA's `homestead_exemption` column disagrees
+        with the relief actually applied that vintage) as though the reform had moved those bills.
+        """
+        return self.alloc_taxable_total - self.reconstructed_taxable_total
+
+    def describe(self) -> str:
+        d = self.diagnostics
+        return (
+            f"land reallocated within OPA's total: {d['n_taxable_changed']:,} parcels' taxable "
+            f"total moves (of {d['n_parcels']:,}) | exemption kinds: "
+            + ", ".join(f"{k}={v:,}" for k, v in d["exemption_kind_counts"].items())
+            + f" | land capped at total on {d['n_land_capped']:,} | "
+            f"OPA-base reconstruction match: {d['reconstruction_match_rate']:.2%} "
+            f"({d['n_reconstruction_mismatch']:,} parcels the rule cannot reproduce today, "
+            "excluded from the change count by differencing against the rule itself)"
+        )
+
+
+def reallocate_land_within_total(
+    gdf,
+    *,
+    new_land_col: str,
+    homestead_cap: float,
+    homestead_col: str = "homestead_exemption",
+    match_tolerance: float = 1.0,
+    reconstruction_floor: float = 0.95,
+) -> LandReallocation:
+    """Re-split OPA's own total assessment into a new land component and a residual building.
+
+    This is the *assessment-standards* reform, not a revaluation. A draft Philadelphia ordinance
+    amending Phila. Code Sec. 2-305 would require the land component to approximate the market
+    value of the land as if vacant, and would forbid deriving it as a fixed percentage of total
+    assessed value -- while explicitly leaving total value, the tax rate, and every unabated
+    parcel's liability alone (its Sec. 3(c) makes land and improvement "complementary parts of a
+    single assessment at actual value"). That is what this function models:
+
+        alloc_land     = min(new_land, gross_total)      # gross_total = OPA's own land + building
+        alloc_building = gross_total - alloc_land
+
+    so `alloc_land + alloc_building == gross_total` by construction. Contrast
+    `carry_forward_exemptions`, which holds OPA's *building* fixed and lets the total rise with a
+    larger land estimate -- the revaluation reading, where every bill moves and the rate must be
+    rolled back.
+
+    **Who actually pays differently.** Because the total is unchanged and the rate is unchanged, a
+    parcel's bill can only move if its exemption depends on the land/building *split*. Three cases:
+
+    - **No exemption, or homestead only** -- bill unchanged. The Homestead Exemption is a flat
+      `min(cap, total)`; the total did not move, so neither does the exemption, only which line it
+      is drawn against. This is the overwhelming majority of parcels and the reason the ordinance
+      can be described as revenue-neutral for unabated property.
+    - **Non-homestead dollars that fit inside the building line** (`building_share`) -- the 10-year
+      construction abatement above all, which exempts the assessed value of the *improvement*.
+      Carried as a SHARE of the building line (`other_exempt / gross_building`), re-applied to
+      `alloc_building`. A fully abated parcel exempts 100% of whatever the improvement is now
+      assessed at, so its taxable value becomes exactly `alloc_land`: raise the land component and
+      an abated parcel pays more, lower it and it pays less. This is the fiscal effect the
+      ordinance's own drafting notes ask a fiscal note to model in both directions.
+    - **Non-homestead dollars that are relief against total value** (`total_share`) -- partial
+      institutional relief. Carried in unchanged dollars; the total is unchanged, so these bills
+      do not move either. Two shapes qualify: dollars exceeding the building line, and dollars
+      that fit inside it but are split pro-rata across both lines (measured on TY2026: 345
+      parcels exempt land and building in exactly the parcel's own land/building ratio, which is
+      a percentage of total value wearing an abatement's clothing).
+
+    Fully exempt parcels whose exemption the homestead cannot explain (`full`) stay fully exempt.
+
+    **Read the effect off `reform_change`, not off OPA's recorded taxable total.** The exemption
+    rule reproduces OPA's own bill on 99.5% of TY2026 parcels, not all of them -- OPA's
+    `homestead_exemption` column sometimes records the statutory cap while a smaller amount was
+    actually applied. Differencing the reform against OPA's recorded total would report that
+    residual as a tax change: measured on TY2026, 1,818 homestead parcels that this reform cannot
+    touch (their exemption does not depend on the split) would appear to move. Differencing
+    against the rule's own reconstruction cancels it exactly.
+
+    **Vacant parcels never move**, whatever LYCD says about them: their building line is already
+    zero, so `alloc_land` is capped at the total and the split is unchanged. The vacant leg of
+    LYCD -- the one defect `docs/VACANT_LAND_VALUATION.md` shows is empirically wrong, and the one
+    that dominates the revaluation reading -- is therefore irrelevant here. That is a real property
+    of the reform, not a modeling convenience.
+
+    Guard: feeding OPA's own gross land back through this rule must reproduce OPA's own taxable
+    total per parcel (`reconstruction_floor`), the same reconstruction `carry_forward_exemptions`
+    enforces. It holds exactly because `alloc_land = gross_land` implies `alloc_building =
+    gross_building` implies `share * alloc_building = other_exempt`.
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `taxable_land`, `taxable_building`, `exempt_land`, `exempt_building`,
+        `homestead_col` and `new_land_col`.
+    new_land_col : str
+        The proposed GROSS land component, e.g. `lycd_land_value`. Capped at the parcel's own
+        total here, so an uncapped column is safe to pass.
+    homestead_cap : float
+        The tax year's statutory Homestead Exemption, from `tax_year_params(year)`.
+
+    Returns
+    -------
+    LandReallocation
+    """
+    import numpy as np
+    import pandas as pd
+
+    p = _decompose_exemptions(gdf, homestead_col, match_tolerance)
+    gross_total = p.gross_land + p.gross_building
+
+    # An abatement exempts the improvement, so it carries as a share of the building line; a
+    # partial institutional exemption is a share of total value, so it carries in dollars.
+    #
+    # Two signals separate them, and BOTH are needed. The dollars must fit inside the building
+    # line -- but that alone misclassifies pro-rata relief: measured on TY2026, 345 parcels split
+    # their exemption across land and building in exactly the parcel's own land/building ratio
+    # (a percentage of total value), while still fitting inside the building line. So the second
+    # test asks whether any non-homestead exemption actually reached OPA's `exempt_land`. Under
+    # this rule's application order (dollar exemptions off building first, then the homestead,
+    # then the remainder onto land), the only land exemption an abated parcel can show is
+    # homestead spill; anything beyond that means the relief is against total value.
+    hs_spill = pd.Series(
+        np.where(p.homestead_active,
+                 (p.homestead_amount - (p.gross_building - p.other_exempt).clip(lower=0)).clip(lower=0),
+                 0.0),
+        index=p.gross_land.index,
+    )
+    non_homestead_exempt_land = (p.exempt_land - hs_spill).clip(lower=0)
+    is_building_share = (
+        (p.other_exempt > match_tolerance)
+        & (p.other_exempt <= p.gross_building + match_tolerance)
+        & (non_homestead_exempt_land <= match_tolerance)
+    )
+    share = pd.Series(
+        np.where(p.gross_building > 0, p.other_exempt / p.gross_building.where(p.gross_building > 0, 1.0), 0.0),
+        index=p.gross_land.index,
+    ).clip(lower=0, upper=1)
+
+    def _exempt_dollars(alloc_building):
+        """Non-homestead exemption dollars against a given building line."""
+        return pd.Series(np.where(is_building_share, share * alloc_building, p.other_exempt),
+                         index=p.gross_land.index).clip(lower=0)
+
+    # Guard: OPA's own land through this rule must reproduce OPA's own taxable total.
+    rec_land, rec_bldg = _apply_exemptions(
+        p.gross_land, p.gross_building, _exempt_dollars(p.gross_building), p, homestead_cap)
+    match_rate, mismatch_dollars = _reconstruction_guard(
+        p, rec_land, rec_bldg, match_tolerance, reconstruction_floor)
+
+    proposed = pd.to_numeric(gdf[new_land_col], errors="coerce").fillna(0.0).clip(lower=0)
+    alloc_land = np.minimum(proposed, gross_total)
+    alloc_building = (gross_total - alloc_land).clip(lower=0)
+    new_land_out, new_bldg_out = _apply_exemptions(
+        alloc_land, alloc_building, _exempt_dollars(alloc_building), p, homestead_cap)
+    new_total = new_land_out + new_bldg_out
+
+    kind = pd.Series("none", index=p.gross_land.index, dtype=object)
+    kind[p.homestead_active] = "homestead"
+    kind[is_building_share] = "building_share"
+    kind[(p.other_exempt > match_tolerance) & ~is_building_share] = "total_share"
+    kind[p.institutional] = "full"
+
+    # The reform's effect is measured against the rule's own reconstruction, not against OPA's
+    # recorded taxable total, so the rule's residual error cancels instead of masquerading as a
+    # tax change -- see LandReallocation.reform_change.
+    rec_total = rec_land + rec_bldg
+    changed = (new_total - rec_total).abs() > match_tolerance
+    diagnostics = {
+        "n_parcels": int(len(gdf)),
+        "n_taxable_changed": int(changed.sum()),
+        "n_taxable_changed_vs_recorded": int((new_total - p.old_taxable).abs().gt(match_tolerance).sum()),
+        "n_reconstruction_mismatch": int((rec_total - p.old_taxable).abs().gt(match_tolerance).sum()),
+        "n_land_capped": int((proposed > gross_total + match_tolerance).sum()),
+        "n_building_share": int((kind == "building_share").sum()),
+        "n_total_share": int((kind == "total_share").sum()),
+        "n_institutional_exempt": int(p.institutional.sum()),
+        "n_homestead_active": int(p.homestead_active.sum()),
+        # Pro-rata relief that fits inside the building line but reaches land: the population the
+        # exempt_land test above exists to keep out of building_share.
+        "n_prorata_reclassified": int(
+            ((p.other_exempt > match_tolerance)
+             & (p.other_exempt <= p.gross_building + match_tolerance)
+             & (non_homestead_exempt_land > match_tolerance)).sum()),
+        "exemption_kind_counts": kind.value_counts().to_dict(),
+        "taxable_change_dollars": float((new_total - rec_total).sum()),
+        "reconstruction_match_rate": match_rate,
+        "reconstruction_mismatch_dollars": mismatch_dollars,
+        "homestead_cap": float(homestead_cap),
+    }
+    return LandReallocation(
+        alloc_land, alloc_building, new_land_out, new_bldg_out, new_total, rec_total, kind,
+        p.institutional, diagnostics,
+    )
