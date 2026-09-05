@@ -82,6 +82,11 @@ CAT_ORDER = [
 ]
 
 
+def pct0(x):
+    """Whole-number percent, for the tests' tolerance parameters."""
+    return f"{float(x):.0f}%"
+
+
 def tex_usd(x, decimals=0):
     """Dollars for a table cell written with escape=False: the '$' must be escaped or it
     opens math mode, and a negative reads better as -$785 than $-785."""
@@ -126,12 +131,15 @@ def load_s2():
         print(f"  [warn] S2 inputs missing ({p.name} or philly scores.csv); S2 section skipped")
         return None
     s2 = pd.read_csv(p, usecols=S2_COLS, dtype={"parcel_id": str, "std_geoid": str})
-    return {
+    out = {
         "export": s2,
         "witnesses": pd.read_csv(PHILLY_LAND / "witnesses.csv"),
         "scores": pd.read_csv(PHILLY_LAND / "scores.csv"),
         "h2h": pd.read_csv(PHILLY_LAND / "head_to_head.csv"),
     }
+    p_tests = PHILLY_LAND / "land_tests.csv"
+    out["tests"] = pd.read_csv(p_tests) if p_tests.exists() else None
+    return out
 
 
 def s2_section(df, s2, H):
@@ -284,6 +292,42 @@ def s2_section(df, s2, H):
     H.add("StwoAVacantMedianPct", vac["tax_change_pct"].median(), lambda x: f"{x:+,.0f}%")
     H.add("StwoAVacantShareOfShift",
           100 * vac["tax_change"].clip(lower=0).sum() / b["tax_change"].clip(lower=0).sum(), pct)
+
+    # --- incentive and uniformity tests -------------------------------------------------
+    t = s2.get("tests")
+    if t is not None and len(t):
+        moran_col = [c for c in t.columns if c.startswith("T4 Moran")][0]
+        # Short headers: four numeric columns with long labels starve the X column, and the
+        # surface names then hyphenate. The caption carries the definitions.
+        disp = pd.DataFrame({
+            "Surface": t["candidate"].values,
+            "T1 neutral": [f"{v:.0f}\\%" for v in t["T1 rate-neutral %"]],
+            "T2 COD": [f"{v:.0f}" for v in t["T2 within-cluster COD"]],
+            "T3 cross / within": [f"{a:.0f}\\% / {b:.0f}\\%" for a, b in
+                                  zip(t["T3 cross-cell smooth %"], t["T3 within-cell smooth %"])],
+            "T4 Moran $I$": [f"{v:+.2f}" for v in t[moran_col]],
+        })
+        save_table(TABLES / "land_tests.tex", disp, col_format="X r r r r", escape=False)
+        key = {"OPA": "Szero", "LYCD allocation": "Sone",
+               "Interpolation (k=20)": "Stwo", "Schedule": "Sthree"}
+        for _, r in t.iterrows():
+            nm = key.get(r["candidate"])
+            if nm is None:
+                continue
+            H.add(f"{nm}TOne", r["T1 rate-neutral %"], pct)
+            H.add(f"{nm}TTwo", r["T2 within-cluster COD"], lambda x: f"{x:.0f}")
+            H.add(f"{nm}TThreeCross", r["T3 cross-cell smooth %"], pct)
+            H.add(f"{nm}TThreeWithin", r["T3 within-cell smooth %"], pct)
+            H.add(f"{nm}TFour", r[moran_col], lambda x: f"{x:+.2f}")
+            H.add(f"{nm}TFourP", r["T4 p"], lambda x: f"{x:.2f}")
+        H.add("TOnePairs", int(t["T1 pairs"].max()), num)
+        # The tests' own parameters, carried alongside their results so the caption cites
+        # generated values and cannot drift if the tests are retuned.
+        r0 = t.iloc[0]
+        H.add("TPairRadiusM", r0["param_pair_radius_m"], lambda x: f"{x:.0f}")
+        H.add("TSizeMatchPct", r0["param_size_match_pct"], pct0)
+        H.add("TNeutralityTolPct", r0["param_neutrality_tol_pct"], pct0)
+        H.add("TSmoothJumpPct", r0["param_smooth_jump_pct"], pct0)
 
     fig_s2(allw, order, short, ex)
     return ex

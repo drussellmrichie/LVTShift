@@ -305,6 +305,12 @@ drift from the LVT notebooks by construction:
   `MODEL_TYPE` carry the surface name so runs never overwrite the LYCD export, and every
   downstream step (both readings, the assertions, the census join) is surface-agnostic.
 
+The report's § 3(b) section also carries four incentive tests from
+`philly_open_avmkit/notebooks/pipeline/land_tests.py` (improvement-neutrality on matched
+pairs, within-market-area uniformity, boundary discontinuity, Moran's I on ratio residuals),
+read from that repo's `out/land/land_tests.csv`. That file carries the tests' own parameters
+alongside their results so the paper's caption cites generated values.
+
 The PPI report on both readings and the ordinance's own tests lives in
 `analysis/lycd_reassessment/philadelphia/paper/` (generator-driven; `Report.tex` carries no
 literals). Its mechanism-level findings are summarized in `docs/LYCD_LAND_MODEL_ROADMAP.md`

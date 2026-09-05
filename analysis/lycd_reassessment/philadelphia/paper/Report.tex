@@ -558,6 +558,57 @@ measurement. The claim that survives is the paired one: on this evidence, interp
 land sales is measurably better than both the assessor and the schedule, and nothing yet
 built is within the standard.
 
+\subsection{The properties a land tax needs}\label{sec:landtests}
+
+\begin{table}[t]
+  \centering
+  \caption{Four tests a ratio study cannot perform. T1 pairs each vacant lot with the nearest
+  built parcel in the same market area, within \LycdTPairRadiusM\,m and \LycdTSizeMatchPct{}
+  on lot area, and asks whether their land rates agree within \LycdTNeutralityTolPct{}. T2 is
+  the dispersion of land \$/sqft inside a market area. T3 compares neighbouring parcels across
+  a cell boundary against pairs inside one cell, counting a pair smooth when their rates
+  differ by less than \LycdTSmoothJumpPct{}. T4 is Moran's $I$ over the land sales' ratio
+  residuals; near zero means errors are scattered rather than clustered by neighbourhood.}
+  \label{tab:landtests}
+  {\small\input{tables/land_tests.tex}}
+\end{table}
+
+Accuracy is not the only thing a land component has to have. Section~3(b)'s second sentence is
+about neutrality, not accuracy; a surface can sit at the right level on average and still
+assign two identical adjacent lots different values because one has a house on it, or leave a
+visible seam along a market-area boundary, or misprice a whole neighbourhood in one direction.
+Table~\ref{tab:landtests} tests those four properties directly, on matched pairs rather than
+through the zone medians Section~\ref{sec:standards} used.\footnote{Adapted from the
+``Lars-Tests'' on the unmerged \texttt{docs\_land} branch of openavmkit; see
+\texttt{land\_tests.py} for which of its eleven transfer to Philadelphia and what had to be
+changed. Two needed fixing before they measured anything: its improvement-neutrality test
+compares land \emph{values} between parcels in the same lot-size quartile, which a
+neutral-in-rate surface fails and a size-blind surface passes, and its uniformity test uses
+OPA's land-equity clusters, which group parcels by characteristics rather than location --- a
+median of seven kilometres apart --- so the flattest surface wins. Both are rerun here on
+distance- and size-matched pairs inside OPA's finest market areas.}
+
+The result confirms by direct measurement what Section~\ref{sec:standards} inferred. On
+matched pairs \LycdTOnePairs{} strong, OPA's land rate agrees between an improved and a
+vacant lot only \LycdSzeroTOne{} of the time and the zone-rate allocation \LycdSoneTOne{} ---
+the allocation essentially never, because its vacant and improved multipliers differ by
+construction. The sales-based surface agrees \LycdStwoTOne{} of the time. Within a market
+area its rates disperse at a COD of \LycdStwoTTwo{} against OPA's \LycdSzeroTTwo{}. It shows
+no boundary effect at all (\LycdStwoTThreeCross{} of cross-cell neighbouring pairs smooth
+against \LycdStwoTThreeWithin{} within-cell), where the schedule is smooth
+\LycdSthreeTThreeWithin{} of the time inside a cell and \LycdSthreeTThreeCross{} across one
+--- its cells leaving a seam the ground does not have. And its errors carry no spatial
+signal (Moran's $I$ = \LycdStwoTFour{}, $p$ = \LycdStwoTFourP{}), where OPA's, the
+allocation's and the schedule's are all significantly clustered.
+
+These tests reward properties an interpolated surface has by construction, and it duly sweeps
+them; that a smooth surface is smooth is not a finding. Two things in the table are. The
+first is how far the two surfaces actually in use are from the standard --- an assessor's land
+value that survives the improvement-neutrality test one time in eight is not a land value in
+the sense Section~3(b) means. The second is T3, which is the one place the schedule and the
+surface can be compared on a property neither was built to optimise: the schedule inherits its
+cells' seams, and that is the concrete form of the accuracy gap Table~\ref{tab:h2h} measured.
+
 \subsection{What it does to the roll}
 
 Painted onto every parcel --- the rate imported, this notebook's own lot area applied ---

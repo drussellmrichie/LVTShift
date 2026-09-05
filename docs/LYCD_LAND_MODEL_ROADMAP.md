@@ -233,8 +233,25 @@ the *form*, which is what this note is about:
 Lars's unmerged `upstream/docs_land` branch of openavmkit (May 2026) builds a much more
 elaborate schedule painter — six evidence streams, per-neighbourhood tables with size curves,
 and eleven LVT-specific "Lars-Tests" — but its extraction stream and its reconciliation both
-lean on `assr_impr_value`, which in Philadelphia is a fifth of total value by rule. Its test
-harness imports cleanly and is the natural Phase 3.
+lean on `assr_impr_value`, which in Philadelphia is a fifth of total value by rule.
+
+Four of those eleven tests now run here, as `philly_open_avmkit/notebooks/pipeline/land_tests.py`
+(reimplemented, not vendored: two more are circular on Philadelphia's data for the same
+`assr_impr_value` reason, two need zoning tables this repo lacks, and one duplicates the
+held-out study). They measure the § 3(b) properties directly — improvement-neutrality on
+matched pairs, within-market-area uniformity, boundary discontinuity, and spatial
+autocorrelation of the ratio residuals — and they confirm what the report had inferred from
+zone medians.
+
+**Both of the two tests that needed adapting had the same defect, and it is worth recognising
+in any future borrowed test: as written they reward a *flat* surface.** Lars's L1 compares
+land *values* between parcels in the same lot-size quartile, so a surface neutral in rate
+fails and a size-blind one passes; his L2 uses OPA's `land_he_id` clusters, which group
+parcels by characteristics rather than location (median within-cluster distance seven
+kilometres), so the flattest candidate wins. Adding a distance and size match to the first and
+moving the second to OPA's finest market areas reversed their ranking of the candidates. A
+borrowed incentive test needs its grouping checked against the geography it will be run on
+before its output means anything.
 
 ## Repo boundaries
 
