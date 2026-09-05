@@ -14,10 +14,11 @@ LYCD ("Least You Can Do") estimates a parcel's land value as
 
 with `k = 0.20` for improved parcels and `k = 1.00` for vacant ones, the zone taken from OPA's
 own Geographic Market Area hierarchy (L3 if it holds enough improved parcels, else L2, else
-L1), and improved-parcel land clipped at the parcel's own market value. `model_lycd.ipynb` and
-`model_lycd_reassessment.ipynb` share this construction through one function,
-`lvt.philadelphia.compute_lycd_land_values`; `model_lycd_post_abatement.ipynb` and
-`model_lycd_refined_prototype.ipynb` still carry it inline (see `cities/philadelphia/CLAUDE.md`).
+L1), and improved-parcel land clipped at the parcel's own market value. `model_lycd.ipynb`,
+`model_lycd_post_abatement.ipynb` and `model_lycd_reassessment.ipynb` share this construction
+through one function, `lvt.philadelphia.compute_lycd_land_values`;
+`model_lycd_refined_prototype.ipynb` still carries it inline, plus its own land-share and
+zone-stratification refinements (see `cities/philadelphia/CLAUDE.md`).
 
 In the appraisal literature this is the **allocation** method: land as a share of total value.
 IAAO's mass-appraisal standard lists allocation last among land techniques, to be used where

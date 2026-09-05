@@ -195,14 +195,18 @@ drift from the LVT notebooks by construction:
 
 - **`compute_lycd_land_values`** is the LYCD construction (lot-area chain, GMA-hierarchical zone
   medians, KNN fallback, improved-only market-value cap) as one function with a diagnostics dict.
-  `model_lycd.ipynb` (migrated 2026-09-04) and `model_lycd_reassessment.ipynb` both call it;
-  `model_lycd.ipynb`'s re-executed output was bit-for-bit identical to its prior inline
-  construction. `model_lycd_reassessment.ipynb` additionally asserts its land base over taxable
-  parcels equals the tracked `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum to
-  1e-6 relative — identical construction on identical inputs, so any difference means a stale
-  export or a divergence. `model_lycd_post_abatement.ipynb` and `model_lycd_refined_prototype.ipynb`
-  still carry the construction inline; migrating them is the natural next step, and the drift
-  check plus the bit-for-bit precedent are what make that safe to verify.
+  `model_lycd.ipynb`, `model_lycd_post_abatement.ipynb` (both migrated 2026-09-04) and
+  `model_lycd_reassessment.ipynb` all call it. Both migrated notebooks' re-executed output was
+  bit-for-bit identical to their prior inline construction — expected, since the two notebooks'
+  LYCD-construction cells were byte-identical to each other before the migration; only their
+  post-abatement-specific cells (which don't touch land) differ. `model_lycd_reassessment.ipynb`
+  additionally asserts its land base over taxable parcels equals the tracked
+  `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum to 1e-6 relative — identical
+  construction on identical inputs, so any difference means a stale export or a divergence.
+  `model_lycd_refined_prototype.ipynb` still carries the construction inline, plus its own FHFA
+  land-share and zone-stratification refinements; migrating it is a bigger job than the plain
+  copy-paste this pair was, since those refinements would need to layer on top of the shared
+  function rather than being absorbed by it.
 - **`carry_forward_exemptions`** is the rule for "same methodology, land valued differently":
   the Homestead Exemption is re-applied as `min(cap, new total)`, building-first (so a homestead
   whose LYCD land lifts it above the cap becomes taxable again — the "re-entering" cohort);
