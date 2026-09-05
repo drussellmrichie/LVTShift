@@ -127,20 +127,28 @@ near 1.0, with COD read net of the noise floor.
    where LYCD's zone rate diverges more from OPA's implicit split, e.g. industrial building
    down a median $105,765, hotel building UP a median $200,670).
 
-   **Wired into `model_lycd.ipynb`** (2026-09-06), restricted to non-abated parcels already
-   in today's taxable base (`full_exmp == 0`) -- deliberately not extended to let today's
-   fully-exempt parcels re-enter under a larger land value, which is
-   `model_lycd_reassessment.ipynb`'s question, not this notebook's. The notebook asserts the
-   no-overshoot invariant on every run (non-vacant, ordinary-taxable parcels) and asserts
-   zero homestead-wiped re-entries (a guard that the `full_exmp == 0` restriction is actually
-   doing its job). Re-executed: land millage 21.91 -> 22.15 mills, improvement millage 5.48
-   -> 5.54 mills, reform improvement base $126.21B -> $121.97B, revenue exactly neutral;
-   category-level changes are modest and continuous, consistent with the ~$4.24B aggregate
-   effect (no category swung sign). `model_lycd_post_abatement.ipynb` and
-   `model_lycd_refined_prototype.ipynb` still use the plain (uncorrected) building treatment;
-   wiring them in is the natural next step and should be similarly mechanical, since both
-   already carry the same abated-parcel exempt_building restoration this mechanism must stay
-   clear of.
+   **Wired into all three split-rate LYCD notebooks** (`model_lycd.ipynb` 2026-09-06,
+   `model_lycd_post_abatement.ipynb` and `model_lycd_refined_prototype.ipynb` 2026-09-07).
+   Same pattern each time: land untouched; abated parcels kept on their existing
+   `exempt_building` restoration (or, in the post-abatement notebook, on whatever Step 5's
+   post-abatement baseline already set, since that step's own building value is unaffected --
+   it pairs with OPA's own `taxable_land`, not LYCD's, so it never had the double-count in
+   the first place); ordinary parcels already in today's taxable base (`full_exmp == 0`)
+   get the exemption-aware residual, deliberately not extended to let today's fully-exempt
+   parcels re-enter under a larger land value, which is `model_lycd_reassessment.ipynb`'s
+   question, not these notebooks'. Each notebook asserts the no-overshoot invariant and zero
+   homestead-wiped re-entries on every run. All three re-executed cleanly, revenue exactly
+   neutral in each, reform improvement base falling by a comparable amount in every case:
+
+   | Notebook | Reform improvement base | Land millage | Improvement millage |
+   |---|---|---|---|
+   | `model_lycd.ipynb` | $126.21B -> $121.97B | 21.91 -> 22.15 | 5.48 -> 5.54 |
+   | `model_lycd_post_abatement.ipynb` | $126.21B -> $121.97B | 24.23 -> 24.50 | 6.06 -> 6.12 |
+   | `model_lycd_refined_prototype.ipynb` | $126.21B -> $120.75B | 21.33 -> 21.63 | 5.33 -> 5.41 |
+
+   Category-level changes are modest and continuous in all three (no sign flips), and
+   `model_lycd_reassessment.ipynb`'s drift check (which reads `model_lycd.ipynb`'s exported
+   land base, untouched by any of this) still passes.
 
    The "market minus depreciated structure cost" extraction-method version (using a genuine
    independent structure-cost estimate rather than either OPA's building figure or a
@@ -218,7 +226,8 @@ reassess-then-split-rate shift into its two components. Its export is
 ## Resolved
 
 - **Land + building can exceed market_value; exemption-aware residual building fixes it**
-  (built and verified 2026-09-05; wired into `model_lycd.ipynb` 2026-09-06). See Stage A
+  (built and verified 2026-09-05; wired into all three split-rate LYCD notebooks
+  2026-09-06/07). See Stage A
   item 4 above for the full account, including the abated-parcel trap
   (`lvt.philadelphia.compute_residual_building_value`,
   `carry_forward_exemptions`'s `gross_building_override`). Measured effect: zero
