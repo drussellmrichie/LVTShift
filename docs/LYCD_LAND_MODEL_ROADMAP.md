@@ -45,9 +45,9 @@ Two properties of the construction matter for everything below:
 | Vacant land priced at 100% of the zone-median *improved* rate | `docs/VACANT_LAND_VALUATION.md`: LYCD over-values bare land in every cut; OPA under-values it; correcting both closes most of the LYCD/OPA land-base gap | Yes, with sales |
 | Flat `k = 0.20` for every improved parcel | Audit finding 3: the OPA-vs-LYCD winner comparison reverses under the FHFA-calibrated prototype | Partly (per-cell share) |
 | Linear in lot area | Sibling ratio study: PRD far above 1.0 on vacant land; `philly_open_avmkit` measures a negative partial correlation of $/sqft with log area and a positive one with frontage/depth | Yes |
-| KNN fallback imputes neighbours' dollar land value, not zone $/sqft times own area | Audit finding 5 | Yes, trivially |
+| ~~KNN fallback imputes neighbours' dollar land value, not zone $/sqft times own area~~ | Audit finding 5 | **Fixed 2026-09-05** |
 | Records with no lot area of their own (condominium units above all) take a neighbour's whole-lot area, then hit the cap at 100% of unit value | `model_lycd_reassessment.ipynb` Step 7, the `knn` lot-area-source row | Needs a per-unit share of the building lot, not a tuning |
-| Cap clips land to market value, leaving a cohort at land ratio 1.00 with positive building value | Audit finding 2 | Yes |
+| Cap clips land to market value, leaving land + building above market on 24.4% of taxable parcels ($9.31B aggregate) | Audit finding 2, re-measured 2026-09-05 -- materially larger than the audit's original framing (19,514 parcels at land ratio 1.00) | Yes, but not for free -- see below |
 | Hard L3 medians step at zone boundaries | Not quantified | Yes (smoothing) |
 
 The first row dominates. It is the one defect that is *empirically decidable*: for a bare lot
@@ -80,9 +80,26 @@ near 1.0, with COD read net of the noise floor.
    transcribed in `philly_open_avmkit` (`data/philly_zoning_dimensions.csv`). The sibling
    repo's Ridge calibration measured all three effects on vacant sales. This is what moves PRD
    toward 1.0, which is the regressivity problem.
-4. **Fix the KNN and cap forms.** Impute the zone $/sqft and multiply by the parcel's own
-   area. Cap land plus building at market, or better, cap land at market minus depreciated
-   structure cost (the extraction method).
+4. **Fix the KNN form; the cap form needs a decision, not just a fix.** Imputing the zone
+   $/sqft and multiplying by the parcel's own area (rather than imputing the neighbours'
+   dollar land value directly) is fixed 2026-09-05, no downside. The cap is a genuinely
+   harder problem than this note first suggested: `market_value` is OPA's own
+   `taxable_land + taxable_building`, so "cap land plus building at market" reduces to
+   capping land at essentially OPA's own land estimate for any parcel not otherwise capped.
+   Measured on TY2026: turning it on moves 142,515 parcels, drops 23.9% of single-family
+   parcels to exactly OPA's ~0.20 default ratio (the artifact LYCD exists to break), and
+   cuts the citywide LYCD/OPA ratio from 1.54x to 1.32x -- a real fix for a real, large
+   problem (24.4% of taxable parcels already over-total, $9.31B in aggregate), but not a
+   free one. It's implemented as an opt-in parameter
+   (`compute_lycd_land_values(..., cap_include_building=True)`, off by default) rather than
+   a default change, pending a decision on which of several ways to resolve the
+   inconsistency to take: cap land and hold building fixed (implemented, the one that
+   collapses toward OPA's split); scale land and building down proportionally when their sum
+   exceeds market (a softer compromise, not implemented); or accept model_land + model_building
+   exceeding market_value as the model's actual finding -- OPA's total assessment, not just
+   its land/building split, is too low -- and cap against nothing (also not implemented). The
+   "market minus depreciated structure cost" extraction-method version needs a cost model
+   this repo does not have, independent of which of the above is chosen.
 5. **Smooth the rate surface.** Replace hard L3 medians with a kernel-weighted rate so two
    sides of one street get one land rate. Boundary cliffs are what appeals litigate.
 
@@ -154,6 +171,12 @@ reassess-then-split-rate shift into its two components. Its export is
 
 ## Resolved
 
+- **KNN fallback imputes rate, not dollar value** (2026-09-05). Parcels outside GMA coverage
+  now take the median $/sqft of their `knn_k` nearest neighbours and apply it to their own
+  area and land_pct, instead of inheriting a neighbour's own dollar land value regardless of
+  size (audit finding 5). No known downside; the citywide land base moved up modestly
+  ($62.54B to $66.19B over taxable parcels, ratio 1.44x to 1.54x of OPA) because the
+  KNN-imputed cohort's own areas differ systematically from their neighbours'.
 - **`model_lycd.ipynb`'s abated-parcel building imputation** (2026-09-04). The notebook had
   regressed to `model_building = 4 x model_land` for abated parcels, while `model.ipynb`,
   `model_post_abatement.ipynb` and `model_lycd_post_abatement.ipynb` all restore the observed

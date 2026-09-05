@@ -204,6 +204,24 @@ drift from the LVT notebooks by construction:
   to 1e-6 relative — identical construction on identical inputs, so any difference means a
   stale export or a divergence.
 
+  **The KNN fallback now imputes a rate, not a dollar value** (2026-09-05): an unmatched
+  parcel takes the median $/sqft of its nearest neighbours and applies it to its OWN area,
+  instead of inheriting a neighbour's dollar land value regardless of size. Re-executing all
+  four notebooks with this fix moved the citywide land base from $62.54B to $66.19B over
+  taxable parcels (ratio 1.44x to 1.54x of OPA's) — a real, no-downside correction, not a
+  refactor, so all four notebooks' numbers moved.
+
+  **The market-value cap has an opt-in `cap_include_building` parameter, off by default —
+  do not turn it on without reading its docstring first.** It closes a real, large problem
+  (24.4% of taxable parcels already have land + building above market_value under the plain
+  cap, $9.31B in aggregate) but at a cost the roadmap's original "cap land plus building at
+  market" framing did not anticipate: since `market_value` is OPA's own
+  `taxable_land + taxable_building`, the tightened cap reduces to capping land at
+  essentially OPA's own estimate for any otherwise-uncapped parcel, dropping 23.9% of
+  single-family parcels to exactly OPA's ~0.20 default ratio and cutting the citywide
+  LYCD/OPA ratio from 1.54x to 1.32x. Left off pending a decision on which of several ways to
+  resolve the inconsistency to take — see `docs/LYCD_LAND_MODEL_ROADMAP.md`.
+
   Two of the function's parameters exist only for the refined prototype and default to the
   base behavior for everyone else: `zone_group_col` (a column name; when given, zone medians
   are computed per (group, GMA level) cell instead of pooling every improved parcel type

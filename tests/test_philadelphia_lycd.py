@@ -27,24 +27,28 @@ def _toy_city(n_per_zone: int = 60) -> tuple[gpd.GeoDataFrame, pd.DataFrame, pd.
     for zone, psf, x0 in (("A", 100.0, 0.0), ("B", 200.0, 10_000.0)):
         for i in range(n_per_zone):
             rows.append(dict(parcel_number=f"{k:09d}", pin=str(1000 + k), category_code="1",
-                             total_area=1000.0, market_value=psf * 1000.0, x=x0 + i, y=0.0,
-                             zone=zone))
+                             total_area=1000.0, market_value=psf * 1000.0, taxable_building=0.0,
+                             x=x0 + i, y=0.0, zone=zone))
             k += 1
         # one vacant lot per zone, OPA-valued far below the zone rate
         rows.append(dict(parcel_number=f"{k:09d}", pin=str(1000 + k), category_code="6",
-                         total_area=500.0, market_value=5_000.0, x=x0 + 1, y=1.0, zone=zone))
+                         total_area=500.0, market_value=5_000.0, taxable_building=0.0,
+                         x=x0 + 1, y=1.0, zone=zone))
         k += 1
     # an improved parcel in zone A with no OPA area but a PIN polygon
     rows.append(dict(parcel_number=f"{k:09d}", pin=str(1000 + k), category_code="1",
-                     total_area=0.0, market_value=100_000.0, x=2.0, y=1.0, zone="A"))
+                     total_area=0.0, market_value=100_000.0, taxable_building=0.0,
+                     x=2.0, y=1.0, zone="A"))
     k += 1
     # an improved parcel with no GMA assignment at all, sitting in zone B's cluster
     rows.append(dict(parcel_number=f"{k:09d}", pin=str(1000 + k), category_code="1",
-                     total_area=1000.0, market_value=200_000.0, x=10_003.0, y=1.0, zone=None))
+                     total_area=1000.0, market_value=200_000.0, taxable_building=0.0,
+                     x=10_003.0, y=1.0, zone=None))
     k += 1
     # a cheap house in the expensive zone: the market-value cap must bind
     rows.append(dict(parcel_number=f"{k:09d}", pin=str(1000 + k), category_code="1",
-                     total_area=1000.0, market_value=20_000.0, x=10_004.0, y=1.0, zone="B"))
+                     total_area=1000.0, market_value=20_000.0, taxable_building=0.0,
+                     x=10_004.0, y=1.0, zone="B"))
     df = pd.DataFrame(rows)
     gdf = gpd.GeoDataFrame(df.drop(columns=["x", "y"]),
                            geometry=[Point(x, y) for x, y in zip(df.x, df.y)], crs="EPSG:3857")
@@ -91,7 +95,7 @@ def test_lycd_hierarchy_fallback_and_knn():
     assigned = out[out.gma3.notna() & (out.category_code == "1") & (out.total_area > 0)]
     assert set(assigned.gma_level) == {"L2"}
     assert assigned.lycd_land_value.nunique() <= 2   # pooled rate x area (cap may bind on one)
-    # unassigned parcel gets the median dollar land value of its neighbours
+    # unassigned parcel gets the median RATE of its neighbours, applied to its own area
     knn = out[out.gma3.isna()]
     assert (knn.gma_level == "knn").all()
     assert knn.lycd_land_value.notna().all()
@@ -139,7 +143,8 @@ def _toy_city_two_categories(n_per_group: int = 30, area: float = 500.0):
     for code, psf in (("1", 100.0), ("4", 300.0)):
         for i in range(n_per_group):
             rows.append(dict(parcel_number=f"{k:09d}", pin=str(3000 + k), category_code=code,
-                             total_area=area, market_value=psf * area, x=float(i), y=0.0))
+                             total_area=area, market_value=psf * area, taxable_building=0.0,
+                             x=float(i), y=0.0))
             k += 1
     df = pd.DataFrame(rows)
     gdf = gpd.GeoDataFrame(df.drop(columns=["x", "y"]),
@@ -182,6 +187,73 @@ def test_lycd_zone_group_col_missing_raises():
     gdf, gma, pin_areas = _toy_city()
     with pytest.raises(ValueError, match="not a column"):
         compute_lycd_land_values(gdf, gma, pin_areas, zone_group_col="nonexistent")
+
+
+def test_lycd_knn_imputes_rate_not_dollar_value():
+    """Audit 2026-08-08 finding 5: an unmatched parcel must get a RATE from its neighbours
+    and apply it to its own area, not inherit a neighbour's dollar land value outright."""
+    rows = []
+    k = 0
+    for i in range(60):
+        rows.append(dict(parcel_number=f"{k:09d}", pin=str(4000 + k), category_code="1",
+                         total_area=10_000.0, market_value=100.0 * 10_000.0, taxable_building=0.0,
+                         x=float(i), y=0.0, zone="A"))
+        k += 1
+    # An unmatched SMALL parcel sitting in the middle of a cluster of LARGE (10,000 sqft) ones.
+    small_pid = f"{k:09d}"
+    rows.append(dict(parcel_number=small_pid, pin=str(4000 + k), category_code="1",
+                     total_area=100.0, market_value=100.0 * 100.0, taxable_building=0.0,
+                     x=30.0, y=0.1, zone=None))
+    df = pd.DataFrame(rows)
+    gdf = gpd.GeoDataFrame(df.drop(columns=["x", "y"]),
+                          geometry=[Point(x, y) for x, y in zip(df.x, df.y)], crs="EPSG:3857")
+    gma = pd.DataFrame({"key": df.parcel_number, "gma3": df.zone, "gma2": "L2", "gma1": "L1"})
+    gma = gma[gma.gma3.notna()]
+    pin_areas = pd.DataFrame({"pin": df.pin, "pin_area_sqft": df.total_area})
+
+    res = compute_lycd_land_values(gdf, gma, pin_areas, min_improved=10, city_area_sqft=1e9)
+    out = res.gdf.set_index("parcel_number")
+    small = out.loc[small_pid]
+    assert small.gma_level == "knn"
+    # Correct: the neighbourhood's $100/sqft rate x this parcel's OWN 100 sqft x 0.20 share.
+    assert np.isclose(small.lycd_land_value, 100.0 * 0.20 * 100.0)
+    # The old (wrong) behaviour inherited a neighbour's own land value outright (100 x 0.20 x
+    # 10,000 = 200,000) -- two orders of magnitude off this parcel's actual size.
+    assert not np.isclose(small.lycd_land_value, 100.0 * 0.20 * 10_000.0)
+
+
+def test_lycd_cap_include_building_off_by_default():
+    """Default behavior (`cap_include_building=False`) is the plain land-only cap, even when
+    the parcel carries a building value -- see the parameter's docstring for why turning it
+    on is a much bigger change than it looks (it collapses land toward OPA's own split for
+    any parcel whose building already accounts for most of market_value)."""
+    gdf, gma, pin_areas = _toy_city()
+    cheap_idx = gdf.index[gdf["market_value"] == 20_000.0][0]
+    gdf.loc[cheap_idx, "taxable_building"] = 5_000.0
+    cheap_pid = gdf.loc[cheap_idx, "parcel_number"]
+
+    res = compute_lycd_land_values(gdf, gma, pin_areas, min_improved=50, city_area_sqft=1e9)
+    out = res.gdf.set_index("parcel_number")
+    assert np.isclose(out.loc[cheap_pid, "lycd_land_value"], 20_000.0)   # unchanged by building
+    assert res.diagnostics["cap_include_building"] is False
+
+
+def test_lycd_cap_include_building_opt_in():
+    """With cap_include_building=True, land is capped at market_value - taxable_building,
+    so land + building never exceeds market_value."""
+    gdf, gma, pin_areas = _toy_city()
+    cheap_idx = gdf.index[gdf["market_value"] == 20_000.0][0]
+    gdf.loc[cheap_idx, "taxable_building"] = 5_000.0
+    cheap_pid = gdf.loc[cheap_idx, "parcel_number"]
+
+    res = compute_lycd_land_values(gdf, gma, pin_areas, min_improved=50, city_area_sqft=1e9,
+                                   cap_include_building=True)
+    out = res.gdf.set_index("parcel_number")
+    cheap = out.loc[cheap_pid]
+    # land = market_value - building = 20,000 - 5,000 = 15,000, so land + building lands
+    # exactly at market_value, never above it.
+    assert np.isclose(cheap.lycd_land_value, 15_000.0)
+    assert np.isclose(cheap.lycd_land_value + 5_000.0, 20_000.0)
 
 
 def _exemption_cases() -> pd.DataFrame:

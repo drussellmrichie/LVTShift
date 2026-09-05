@@ -266,6 +266,7 @@ def compute_lycd_land_values(
     opa_pin_disagree_factor: float = 3.0,
     vacant_codes=VACANT_CATEGORY_CODES,
     cap_improved_at_market: bool = True,
+    cap_include_building: bool = False,
     knn_k: int = 5,
     city_area_sqft: float = PHILADELPHIA_LAND_SQFT,
     max_city_area_ratio: float = 1.5,
@@ -282,11 +283,16 @@ def compute_lycd_land_values(
         share           = land_pct_improved for improved parcels, land_pct_vacant for vacant ones
 
     The zone is the finest GMA level with at least `min_improved` improved parcels (L3, else
-    L2, else L1). Parcels outside GMA coverage take the median *dollar* land value of their
-    `knn_k` nearest GMA-assigned neighbours (note: not zone $/sqft times their own area -- a
-    known limitation, audit 2026-08-08 finding 5). Improved parcels are then clipped at their
-    own `market_value`; vacant parcels are not, because OPA under-assesses bare land and the
-    clip would erase the development-potential signal.
+    L2, else L1). Parcels outside GMA coverage take the median *rate* ($/sqft) of their
+    `knn_k` nearest GMA-assigned neighbours, applied to their OWN area and land_pct -- a
+    parcel's own size still determines its land value even when its zone rate comes from a
+    spatial smooth (fixed 2026-09; previously imputed the neighbours' dollar land value
+    directly, so a small unmatched parcel next to large ones inherited a land value sized for
+    their lots -- audit 2026-08-08 finding 5). Improved parcels are then clipped at
+    `market_value` (or, with `cap_include_building=True`, at `market_value - taxable_building`
+    -- see that parameter's docstring for why this is off by default). Vacant parcels are not
+    capped, because OPA under-assesses bare land and the clip would erase the
+    development-potential signal.
 
     Two refinements, off by default, layer on the base construction without changing it for
     callers that do not use them (`model_lycd_refined_prototype.ipynb` uses both):
@@ -316,7 +322,9 @@ def compute_lycd_land_values(
     ----------
     gdf : GeoDataFrame
         The year-keyed parcel cache. Needs `parcel_number` (zero-padded string), `pin`,
-        `category_code`, `total_area`, `market_value` and point geometry.
+        `category_code`, `total_area`, `market_value`, `taxable_building` (OPA's raw,
+        pre-abatement-restoration figure -- used only for the market-value cap) and point
+        geometry.
     gma : DataFrame
         `parcel_gma_assignment.parquet`: `key` (parcel_number) + `gma1`, `gma2`, `gma3`.
     pin_areas : DataFrame
@@ -324,6 +332,25 @@ def compute_lycd_land_values(
         Do NOT pass the older `parcel_areas_by_pin.parquet` -- those areas are Web Mercator.
     cap_improved_at_market : bool
         Apply the improved-parcel market-value clip. Off only for diagnostics.
+    cap_include_building : bool, default False
+        Cap land at `market_value - taxable_building` instead of `market_value` alone, so
+        land plus building cannot exceed the parcel's total value. **Off by default because
+        it is a much bigger change than it looks.** `market_value` is OPA's own
+        `taxable_land + taxable_building` (verified: true for all but 10 of 583,249 TY2026
+        parcels), so `market_value - taxable_building` reduces to essentially OPA's OWN land
+        estimate for any parcel not otherwise capped. Measured on TY2026 (2026-09-05,
+        `cap_improved_at_market=True` baseline): turning this on moves 142,515 parcels,
+        drops 23.9% of single-family parcels to *exactly* OPA's ~0.20 land ratio -- the same
+        default-ratio collapse LYCD exists to break -- and cuts the citywide LYCD/OPA land
+        ratio from 1.54x to 1.32x. It is a real fix for a real problem: 24.4% of taxable
+        non-vacant parcels already have `lycd_land_value + taxable_building > market_value`
+        under the plain cap, $9.31B of double-counted value in aggregate (a materially larger
+        and more consequential finding than the audit's original framing of 19,514 parcels
+        already at land ratio 1.00). But "cap land, hold building fixed" is only one of
+        several ways to resolve that inconsistency, and every one of them changes the model's
+        headline land premium by a similar order of magnitude. Decide deliberately per
+        notebook rather than accepting this as a silent default; see
+        `docs/LYCD_LAND_MODEL_ROADMAP.md` for the finding and the open design question.
     land_pct_improved : float or pandas.Series
         See "Two refinements" above.
     zone_group_col : str, optional
@@ -451,23 +478,33 @@ def compute_lycd_land_values(
     else:
         land_pct_improved_arr = float(land_pct_improved)
     land_pct = pd.Series(np.where(is_vacant, land_pct_vacant, land_pct_improved_arr), index=out.index)
+
+    # --- KNN fallback for parcels outside GMA coverage: impute the RATE, not the dollar
+    # value. Imputing a dollar land value directly (the pre-2026-09 behaviour) had an
+    # unmatched small parcel next to large ones inherit a land value sized for their lots,
+    # ignoring its own area -- audit 2026-08-08 finding 5. Imputing the $/sqft rate instead
+    # and then multiplying by this parcel's OWN area and land_pct fixes that: the KNN
+    # contributes only a locally-typical price level, exactly as it does for area.
+    n_knn = int((~gma_matched).sum())
+    zone_psf = pd.Series(_knn_median(zone_psf.values), index=out.index)
     out["lycd_zone_psf"] = zone_psf
     out["lycd_land_pct"] = land_pct
-    land = pd.Series(
-        np.where(gma_matched & has_area, (zone_psf * land_pct * area).clip(lower=0), np.nan),
-        index=out.index, dtype=float,
-    )
-
-    # --- KNN fallback for parcels outside GMA coverage (dollar values, see docstring) ---
-    n_knn = int(land.isna().sum())
-    land = pd.Series(_knn_median(land.values), index=out.index)
+    land = (zone_psf * land_pct * area).clip(lower=0).fillna(0.0)
 
     # --- Market-value cap, improved parcels only ---
+    # cap_include_building (off by default -- see its docstring): also subtract taxable_building
+    # from the ceiling, so land plus building cannot exceed market_value. `taxable_building` is
+    # OPA's raw pre-abatement figure, 0 for abated parcels at this point in the pipeline (their
+    # building is restored downstream, after this function returns), so this option is a no-op
+    # for abated parcels either way.
     is_vac_code = cat.isin(vacant)
     pre_cap = float(land.sum())
     n_capped = 0
     if cap_improved_at_market:
         mv_cap = market.fillna(0).clip(lower=0)
+        if cap_include_building:
+            building = pd.to_numeric(out["taxable_building"], errors="coerce").fillna(0.0).clip(lower=0)
+            mv_cap = (mv_cap - building).clip(lower=0)
         capped = (land > mv_cap) & ~is_vac_code
         n_capped = int(capped.sum())
         land = pd.Series(np.where(~is_vac_code, np.minimum(land, mv_cap), land), index=out.index)
@@ -495,6 +532,7 @@ def compute_lycd_land_values(
         "land_pct_vacant": land_pct_vacant,
         "min_improved": min_improved,
         "zone_group_col": zone_group_col,
+        "cap_include_building": cap_include_building,
     }
     return LycdResult(out, diagnostics)
 
