@@ -195,18 +195,23 @@ drift from the LVT notebooks by construction:
 
 - **`compute_lycd_land_values`** is the LYCD construction (lot-area chain, GMA-hierarchical zone
   medians, KNN fallback, improved-only market-value cap) as one function with a diagnostics dict.
-  `model_lycd.ipynb`, `model_lycd_post_abatement.ipynb` (both migrated 2026-09-04) and
-  `model_lycd_reassessment.ipynb` all call it. Both migrated notebooks' re-executed output was
-  bit-for-bit identical to their prior inline construction — expected, since the two notebooks'
-  LYCD-construction cells were byte-identical to each other before the migration; only their
-  post-abatement-specific cells (which don't touch land) differ. `model_lycd_reassessment.ipynb`
-  additionally asserts its land base over taxable parcels equals the tracked
-  `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum to 1e-6 relative — identical
-  construction on identical inputs, so any difference means a stale export or a divergence.
-  `model_lycd_refined_prototype.ipynb` still carries the construction inline, plus its own FHFA
-  land-share and zone-stratification refinements; migrating it is a bigger job than the plain
-  copy-paste this pair was, since those refinements would need to layer on top of the shared
-  function rather than being absorbed by it.
+  All four LYCD notebooks now call it — `model_lycd.ipynb`, `model_lycd_post_abatement.ipynb`,
+  `model_lycd_refined_prototype.ipynb` (all migrated 2026-09-04) and
+  `model_lycd_reassessment.ipynb`. Every migrated notebook's re-executed output was bit-for-bit
+  identical to its prior inline construction, including the refined prototype's two
+  refinements. `model_lycd_reassessment.ipynb` additionally asserts its land base over taxable
+  parcels equals the tracked `philadelphia_lycd_ty<YEAR>.csv` export's `taxable_land_value` sum
+  to 1e-6 relative — identical construction on identical inputs, so any difference means a
+  stale export or a divergence.
+
+  Two of the function's parameters exist only for the refined prototype and default to the
+  base behavior for everyone else: `zone_group_col` (a column name; when given, zone medians
+  are computed per (group, GMA level) cell instead of pooling every improved parcel type
+  together — the prototype's Q2 refinement) and `land_pct_improved` accepting a per-parcel
+  `pandas.Series` in addition to a scalar (the prototype's Q1 refinement, an FHFA tract land
+  share for core-residential categories). Both refinements' Philadelphia-specific inputs — the
+  FHFA join, the residential-context and core-residential category sets — stay in the
+  notebook; only the zone-median and land-value math itself moved into the shared function.
 - **`carry_forward_exemptions`** is the rule for "same methodology, land valued differently":
   the Homestead Exemption is re-applied as `min(cap, new total)`, building-first (so a homestead
   whose LYCD land lifts it above the cap becomes taxable again — the "re-entering" cohort);

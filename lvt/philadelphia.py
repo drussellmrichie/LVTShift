@@ -260,7 +260,7 @@ def compute_lycd_land_values(
     gma,
     pin_areas,
     *,
-    land_pct_improved: float = 0.20,
+    land_pct_improved=0.20,
     land_pct_vacant: float = 1.00,
     min_improved: int = 50,
     opa_pin_disagree_factor: float = 3.0,
@@ -269,6 +269,7 @@ def compute_lycd_land_values(
     knn_k: int = 5,
     city_area_sqft: float = PHILADELPHIA_LAND_SQFT,
     max_city_area_ratio: float = 1.5,
+    zone_group_col: "str | None" = None,
 ) -> LycdResult:
     """GMA-hierarchical LYCD land values, the construction shared by every Philadelphia notebook.
 
@@ -286,6 +287,22 @@ def compute_lycd_land_values(
     known limitation, audit 2026-08-08 finding 5). Improved parcels are then clipped at their
     own `market_value`; vacant parcels are not, because OPA under-assesses bare land and the
     clip would erase the development-potential signal.
+
+    Two refinements, off by default, layer on the base construction without changing it for
+    callers that do not use them (`model_lycd_refined_prototype.ipynb` uses both):
+
+    - `zone_group_col`: a column on `gdf` with a per-parcel group label (e.g. "Residential"
+      vs "NonResidential"). When given, zone medians are computed per (group, GMA level) cell
+      instead of pooling every improved parcel type together, so a rowhouse is priced against
+      other residential comps, not whatever commercial parcel happens to share its zone. When
+      `None` (the default), every row shares one implicit group and results are identical to
+      the ungrouped construction -- verified bit-for-bit against `model_lycd.ipynb`'s prior
+      inline version.
+    - `land_pct_improved` as a `pandas.Series` (aligned to `gdf.index`) instead of a scalar:
+      a per-parcel allocation share, e.g. an external land-share estimate for some categories
+      and the flat default for others. The value at vacant rows is ignored -- `land_pct_vacant`
+      always wins there, so callers need not special-case vacant parcels when building the
+      Series.
 
     Lot area uses ONE convention, true ground square feet, with no spatial join: OPA
     `total_area` first, then the Mercator-corrected PIN-keyed DOR polygon area, then KNN from
@@ -307,6 +324,10 @@ def compute_lycd_land_values(
         Do NOT pass the older `parcel_areas_by_pin.parquet` -- those areas are Web Mercator.
     cap_improved_at_market : bool
         Apply the improved-parcel market-value clip. Off only for diagnostics.
+    land_pct_improved : float or pandas.Series
+        See "Two refinements" above.
+    zone_group_col : str, optional
+        See "Two refinements" above.
 
     Returns
     -------
@@ -392,14 +413,29 @@ def compute_lycd_land_values(
     is_improved = ~cat.isin(vacant) & has_market & has_area
     is_vacant = cat.isin(vacant) & has_market & has_area
 
+    # Zone-median cell key: (zone_group, gma level) when zone_group_col is given, else just
+    # the gma level -- a constant group prefix on every row partitions identically to no
+    # grouping at all, so this one code path serves both cases.
+    if zone_group_col is not None:
+        if zone_group_col not in out.columns:
+            raise ValueError(f"zone_group_col {zone_group_col!r} is not a column on gdf")
+        group = out[zone_group_col]
+    else:
+        group = pd.Series("_all", index=out.index)
+
+    def _cell_key(level_col: str) -> pd.Series:
+        return pd.Series(list(zip(group, out[level_col])), index=out.index)
+
+    key1, key2, key3 = _cell_key("gma1"), _cell_key("gma2"), _cell_key("gma3")
+
     total_psf = pd.Series(np.where(is_improved | is_vacant, market / area, np.nan), index=out.index)
-    imp = pd.DataFrame({"psf": total_psf[is_improved], "gma1": out.loc[is_improved, "gma1"],
-                        "gma2": out.loc[is_improved, "gma2"], "gma3": out.loc[is_improved, "gma3"]})
-    l3_n = out["gma3"].map(imp.groupby("gma3")["psf"].count()).fillna(0)
-    l2_n = out["gma2"].map(imp.groupby("gma2")["psf"].count()).fillna(0)
-    l3_med = out["gma3"].map(imp.groupby("gma3")["psf"].median())
-    l2_med = out["gma2"].map(imp.groupby("gma2")["psf"].median())
-    l1_med = out["gma1"].map(imp.groupby("gma1")["psf"].median())
+    imp = pd.DataFrame({"psf": total_psf[is_improved], "k1": key1[is_improved],
+                        "k2": key2[is_improved], "k3": key3[is_improved]})
+    l3_n = key3.map(imp.groupby("k3")["psf"].count()).fillna(0)
+    l2_n = key2.map(imp.groupby("k2")["psf"].count()).fillna(0)
+    l3_med = key3.map(imp.groupby("k3")["psf"].median())
+    l2_med = key2.map(imp.groupby("k2")["psf"].median())
+    l1_med = key1.map(imp.groupby("k1")["psf"].median())
 
     zone_psf = pd.Series(
         np.where(l3_n >= min_improved, l3_med, np.where(l2_n >= min_improved, l2_med, l1_med)),
@@ -410,7 +446,11 @@ def compute_lycd_land_values(
         np.where(l3_n >= min_improved, "L3", np.where(l2_n >= min_improved, "L2", "L1")),
     )
 
-    land_pct = pd.Series(np.where(is_vacant, land_pct_vacant, land_pct_improved), index=out.index)
+    if isinstance(land_pct_improved, pd.Series):
+        land_pct_improved_arr = land_pct_improved.reindex(out.index).astype(float).to_numpy()
+    else:
+        land_pct_improved_arr = float(land_pct_improved)
+    land_pct = pd.Series(np.where(is_vacant, land_pct_vacant, land_pct_improved_arr), index=out.index)
     out["lycd_zone_psf"] = zone_psf
     out["lycd_land_pct"] = land_pct
     land = pd.Series(
@@ -448,9 +488,13 @@ def compute_lycd_land_values(
         "land_base_pre_cap": pre_cap,
         "land_base_post_cap": post_cap,
         "cap_removed_share": (pre_cap - post_cap) / pre_cap if pre_cap > 0 else float("nan"),
-        "land_pct_improved": land_pct_improved,
+        "land_pct_improved": (
+            f"per-parcel Series (median {float(np.median(land_pct_improved_arr)):.4f})"
+            if isinstance(land_pct_improved, pd.Series) else land_pct_improved
+        ),
         "land_pct_vacant": land_pct_vacant,
         "min_improved": min_improved,
+        "zone_group_col": zone_group_col,
     }
     return LycdResult(out, diagnostics)
 

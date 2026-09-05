@@ -104,6 +104,86 @@ def test_lycd_area_guard_raises():
         compute_lycd_land_values(gdf, gma, pin_areas, city_area_sqft=1.0)
 
 
+def test_lycd_land_pct_improved_as_series():
+    """A per-parcel share, as model_lycd_refined_prototype.ipynb passes an FHFA tract share."""
+    gdf, gma, pin_areas = _toy_city()
+    # Zone A's improved parcels get 0.30, zone B's get 0.10; every vacant row gets a
+    # deliberately wrong 0.99, to confirm land_pct_vacant overrides it regardless.
+    share = pd.Series(
+        np.where(gdf["category_code"] == "6", 0.99,
+                 np.where(gdf["zone"] == "A", 0.30, 0.10)),
+        index=gdf.index,
+    )
+    res = compute_lycd_land_values(gdf, gma, pin_areas, land_pct_improved=share,
+                                   min_improved=50, city_area_sqft=1e9)
+    out = res.gdf.set_index("parcel_number")
+
+    a_imp = out[(out.gma3 == "A") & (out.category_code == "1") & (out.total_area > 0)]
+    assert np.allclose(a_imp.lycd_land_value, 100.0 * 0.30 * 1000.0)
+
+    b_imp = out[(out.gma3 == "B") & (out.category_code == "1") & (out.total_area > 0)]
+    assert np.allclose(b_imp.lycd_land_value, 200.0 * 0.10 * 1000.0)
+
+    # Vacant rows ignore the 0.99 in the Series -- land_pct_vacant (default 1.00) still wins.
+    vac_a = out[(out.gma3 == "A") & (out.category_code == "6")]
+    assert np.allclose(vac_a.lycd_land_value, 100.0 * 500.0)
+    assert res.diagnostics["land_pct_improved"].startswith("per-parcel Series")
+
+
+def _toy_city_two_categories(n_per_group: int = 30, area: float = 500.0):
+    """One GMA zone with two co-located property types at different rates: category '1'
+    ("Residential") at $100/sqft, category '4' ("NonResidential") at $300/sqft. Every parcel
+    in a group shares the identical psf, so any member can serve as the read-off probe."""
+    rows = []
+    k = 0
+    for code, psf in (("1", 100.0), ("4", 300.0)):
+        for i in range(n_per_group):
+            rows.append(dict(parcel_number=f"{k:09d}", pin=str(3000 + k), category_code=code,
+                             total_area=area, market_value=psf * area, x=float(i), y=0.0))
+            k += 1
+    df = pd.DataFrame(rows)
+    gdf = gpd.GeoDataFrame(df.drop(columns=["x", "y"]),
+                           geometry=[Point(x, y) for x, y in zip(df.x, df.y)], crs="EPSG:3857")
+    gma = pd.DataFrame({"key": df.parcel_number, "gma3": "A", "gma2": "L2", "gma1": "L1"})
+    pin_areas = pd.DataFrame({"pin": df.pin, "pin_area_sqft": df.total_area})
+    return gdf, gma, pin_areas
+
+
+def test_lycd_zone_group_col_stratifies_zone_median():
+    """model_lycd_refined_prototype.ipynb's Q2 refinement: price a rowhouse against other
+    residential comps, not whichever commercial parcel happens to share its GMA zone."""
+    gdf, gma, pin_areas = _toy_city_two_categories()
+    gdf["_zone_group"] = np.where(gdf["category_code"] == "1", "Residential", "NonResidential")
+
+    pooled = compute_lycd_land_values(gdf, gma, pin_areas, min_improved=10, city_area_sqft=1e9)
+    stratified = compute_lycd_land_values(gdf, gma, pin_areas, min_improved=10, city_area_sqft=1e9,
+                                          zone_group_col="_zone_group")
+
+    pooled_out = pooled.gdf.set_index("parcel_number")
+    strat_out = stratified.gdf.set_index("parcel_number")
+    resid_pid = gdf.loc[gdf.category_code == "1", "parcel_number"].iloc[0]
+    nonresid_pid = gdf.loc[gdf.category_code == "4", "parcel_number"].iloc[0]
+
+    # Pooled: one blended median (100 and 300 in equal counts -> 200) applied to everyone,
+    # so a residential and a non-residential parcel with the same area get the same land value.
+    assert np.isclose(pooled_out.loc[resid_pid, "lycd_zone_psf"], 200.0)
+    assert np.isclose(pooled_out.loc[resid_pid, "lycd_land_value"],
+                      pooled_out.loc[nonresid_pid, "lycd_land_value"])
+    assert np.isclose(pooled_out.loc[resid_pid, "lycd_land_value"], 200.0 * 0.20 * 500.0)
+
+    # Stratified: each group sees its own pure rate.
+    assert np.isclose(strat_out.loc[resid_pid, "lycd_zone_psf"], 100.0)
+    assert np.isclose(strat_out.loc[nonresid_pid, "lycd_zone_psf"], 300.0)
+    assert np.isclose(strat_out.loc[resid_pid, "lycd_land_value"], 100.0 * 0.20 * 500.0)
+    assert np.isclose(strat_out.loc[nonresid_pid, "lycd_land_value"], 300.0 * 0.20 * 500.0)
+
+
+def test_lycd_zone_group_col_missing_raises():
+    gdf, gma, pin_areas = _toy_city()
+    with pytest.raises(ValueError, match="not a column"):
+        compute_lycd_land_values(gdf, gma, pin_areas, zone_group_col="nonexistent")
+
+
 def _exemption_cases() -> pd.DataFrame:
     cap = 100_000.0
     return pd.DataFrame({
