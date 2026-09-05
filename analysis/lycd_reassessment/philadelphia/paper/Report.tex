@@ -487,8 +487,9 @@ surface fitted only to still-vacant sales is fitted to the land nobody wanted, a
   \caption{Held-out accuracy against \LycdHeldoutN{} land sales, all three streams pooled.
   Five folds assigned by parcel; the interpolation and the schedule are refitted inside each
   fold. The COD is trimmed of the outer 5\% of ratios at each end and applied identically to % noqa: hardcode
-  every surface; the raw figure is the same statistic on every row. The Kolbe extraction was
-  calibrated on these sales and is an in-sample upper bound.} % noqa: hardcode
+  every surface; the raw figure is the same statistic on every row. The extraction is rebuilt
+  without its published calibration and re-levelled inside each fold, for the reason given in
+  the text.}
   \label{tab:heldout}
   \input{tables/heldout.tex}
 \end{table}
@@ -530,6 +531,21 @@ best of the five.
   \label{tab:bystream}
   \input{tables/heldout_by_stream.tex}
 \end{table}
+
+The fifth candidate is worth its own sentence, because it is the one an appraiser would
+reach for first. Extraction --- decomposing improved sales into land and structure and taking
+land as the residual --- is a recognized method under Section~3(d), and this repository already
+runs one (a semi-parametric estimator that differences out location). As published it is
+re-levelled against the same vacant sales this study scores on, so its apparent accuracy is
+in-sample and cannot be compared with anything. Rebuilt without that step and re-levelled
+inside each fold instead, it scores \LycdSfourcvTrCod{} --- worse than OPA's
+\LycdSzeroTrCod{} by \LycdSfourcvVsSzeroDiffAbs{} COD, and worse than the interpolation by
+\LycdStwoVsSfourcvDiffAbs{} (\LycdStwoVsSfourcvLo{} to \LycdStwoVsSfourcvHi{}). The
+extraction carries real land signal --- its median ratio is \LycdSfourcvTrMedian{}, so it is
+not mis-levelled --- but it is noisier about where land is valuable than the land sales are
+directly. On a method the ordinance explicitly contemplates, that is worth knowing: the
+residual of an improved sale is a weaker instrument than a vacant one, and Philadelphia has
+enough of the latter to prefer them.
 
 Where the gain comes from is in Table~\ref{tab:bystream}. On still-vacant lots OPA and the
 interpolation tie at \LycdSzeroTrCodWone{} and \LycdStwoTrCodWone{}; OPA's land values

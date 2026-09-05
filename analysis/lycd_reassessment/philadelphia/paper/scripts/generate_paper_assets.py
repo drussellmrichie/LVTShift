@@ -170,7 +170,8 @@ def s2_section(df, s2, H):
     allw = sc[sc["subset"].eq("all witnesses")].set_index("candidate")
     keymap = {"S0 OPA assessed land": "Szero", "S1 LYCD zone-rate allocation": "Sone",
               "S2 kNN interpolation (k=20)": "Stwo", "S3 published schedule": "Sthree",
-              "S4 Kolbe extraction (in-sample)": "Sfour"}
+              "S4 Kolbe extraction (in-sample)": "Sfour",
+              "S4 Kolbe extraction (fold-calibrated)": "Sfourcv"}
     for cand, nm in keymap.items():
         if cand in allw.index:
             r = allw.loc[cand]
@@ -186,15 +187,19 @@ def s2_section(df, s2, H):
     H.add("SzeroNetHi", r0["cod_net_hi"], lambda x: f"{x:.0f}")
     H.add("HeldoutN", int(r2["n"]), num)
     order = ["S0 OPA assessed land", "S1 LYCD zone-rate allocation", "S2 kNN interpolation (k=20)",
-             "S3 published schedule", "S4 Kolbe extraction (in-sample)"]
+             "S3 published schedule", "S4 Kolbe extraction (fold-calibrated)",
+             "S4 Kolbe extraction (in-sample)"]
+    order = [c for c in order if c in allw.index]
     short = {"S0 OPA assessed land": "OPA assessed land",
              "S1 LYCD zone-rate allocation": "LYCD zone-rate allocation",
              "S2 kNN interpolation (k=20)": "Interpolation among land sales (k=20)",
              "S3 published schedule": "Published rate schedule",
-             "S4 Kolbe extraction (in-sample)": "Kolbe extraction (in-sample)"}
+             "S4 Kolbe extraction (fold-calibrated)": "Extraction from improved sales",
+             "S4 Kolbe extraction (in-sample)": "Extraction, as published (in-sample)"}
     brief = {"S0 OPA assessed land": "OPA", "S1 LYCD zone-rate allocation": "LYCD allocation",
              "S2 kNN interpolation (k=20)": "Interpolation", "S3 published schedule": "Schedule",
-             "S4 Kolbe extraction (in-sample)": "Kolbe"}
+             "S4 Kolbe extraction (fold-calibrated)": "Extraction",
+             "S4 Kolbe extraction (in-sample)": "Extraction (in-sample)"}
     rows = allw.loc[[c for c in order if c in allw.index]]
     tbl = pd.DataFrame({
         "Surface": [short[c] for c in rows.index],
@@ -224,7 +229,9 @@ def s2_section(df, s2, H):
     hk = {("S2 kNN interpolation (k=20)", "S3 published schedule"): "StwoVsSthree",
           ("S2 kNN interpolation (k=20)", "S0 OPA assessed land"): "StwoVsSzero",
           ("S3 published schedule", "S0 OPA assessed land"): "SthreeVsSzero",
-          ("S0 OPA assessed land", "S1 LYCD zone-rate allocation"): "SzeroVsSone"}
+          ("S0 OPA assessed land", "S1 LYCD zone-rate allocation"): "SzeroVsSone",
+          ("S2 kNN interpolation (k=20)", "S4 Kolbe extraction (fold-calibrated)"): "StwoVsSfourcv",
+          ("S4 Kolbe extraction (fold-calibrated)", "S0 OPA assessed land"): "SfourcvVsSzero"}
     rows = []
     for _, r in h2h.iterrows():
         nm = hk.get((r["a"], r["b"]))
