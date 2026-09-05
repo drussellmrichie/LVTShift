@@ -17,6 +17,7 @@ study, which scripts/vacant_land_ratio_study.py writes, and the tract geometry):
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -115,7 +116,13 @@ def load():
 # outputs read-only (never the reverse). The S2 export is this notebook re-run with
 # LVT_LAND_SURFACE=s2_k20, so every tax-side number for S2 comes through the same code path
 # as LYCD's and differs only in the land rate.
-PHILLY_LAND = Path(r"C:\projects\philly_open_avmkit\notebooks\pipeline\data\us-pa-philadelphia\out\land")
+#
+# Point PHILLY_AVMKIT_ROOT at that repo's checkout to build the S2 section elsewhere; the
+# default is this machine's layout. Without it the generator still runs and simply omits the
+# section (load_s2 warns and returns None), so a fresh clone produces a shorter report rather
+# than a wrong one.
+PHILLY_AVMKIT_ROOT = Path(os.environ.get("PHILLY_AVMKIT_ROOT", r"C:\projects\philly_open_avmkit"))
+PHILLY_LAND = PHILLY_AVMKIT_ROOT / "notebooks" / "pipeline" / "data" / "us-pa-philadelphia" / "out" / "land"
 S2_SLUG = f"{SLUG}_s2_k20"
 S2_COLS = ["parcel_id", "lycd_land_value", "alloc_land", "alloc_tax_change", "alloc_tax_change_pct",
            "tax_change", "tax_change_pct", "current_tax", "land_millage", "land_surface_source",
