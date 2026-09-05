@@ -147,9 +147,16 @@ reassess-then-split-rate shift into its two components. Its export is
 - Lars Doucet's write-up of the method (`openavmkit/valuing land - the simplest viable
   method.pdf`) is image-only and was not machine-readable when this note was written; check
   whether it already specifies any of the Stage A refinements before implementing them.
-- The tracked `model_lycd.ipynb` still imputes abated parcels' building value as four times
-  LYCD land; `model_lycd_refined_prototype.ipynb` and the reassessment notebook restore it from
-  `exempt_building`. The four-scenario audit recorded this and the directory `CLAUDE.md`
-  describes it as fixed; the notebook cell does not agree. Resolve before the next
-  four-scenario re-run.
 - No published artifact yet carries the land-share band the audit asked for (finding 6).
+
+## Resolved
+
+- **`model_lycd.ipynb`'s abated-parcel building imputation** (2026-09-04). The notebook had
+  regressed to `model_building = 4 x model_land` for abated parcels, while `model.ipynb`,
+  `model_post_abatement.ipynb` and `model_lycd_post_abatement.ipynb` all restore the observed
+  `exempt_building` value. Fixed to match; re-executed. Reform improvement base moved
+  $118.53B -> $126.21B (abated bldg base $8.53B -> $16.21B), land millage 23.23 -> 22.76 mills,
+  improvement millage 5.81 -> 5.69 mills. The LYCD land base itself is untouched
+  ($82.37B all parcels, $62.54B over taxable parcels) since the fix only touches building
+  imputation. See `cities/philadelphia/CLAUDE.md` for the full account of why the earlier
+  revert's rationale was wrong.
