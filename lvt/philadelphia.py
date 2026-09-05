@@ -20,6 +20,7 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "ZeroBuildingSplit", "split_zero_building_parcels",
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
+           "compute_residual_building_value",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES"]
 
 
@@ -568,6 +569,7 @@ def carry_forward_exemptions(
     homestead_col: str = "homestead_exemption",
     match_tolerance: float = 1.0,
     reconstruction_floor: float = 0.95,
+    gross_building_override: "pd.Series | None" = None,
 ) -> ExemptionCarryForward:
     """Re-apply each parcel's existing exemptions to a base whose LAND value has changed.
 
@@ -591,7 +593,31 @@ def carry_forward_exemptions(
     The guard is a reconstruction: feeding OPA's own gross land back through this rule must
     reproduce OPA's taxable total per parcel. The match rate is reported and enforced
     (`reconstruction_floor`); if the rule mis-described the exemptions, this is the number that
-    would move.
+    would move. **The guard always checks against OPA's own recorded building value,
+    regardless of `gross_building_override`** -- it validates the exemption RULE (does this
+    rule reproduce today's actual bill from today's actual numbers), which is a fact about the
+    rule, not about whichever building scenario the real call below is exploring.
+
+    `gross_building_override` lets a caller replace "building unchanged, land revised" with a
+    different building scenario for the real (non-guard) computation -- see
+    `compute_residual_building_value` for the reason this exists: holding OPA's own building
+    value fixed while substantially raising land (e.g. LYCD's land estimate) routinely pushes
+    land + building above `market_value`, because `market_value` is OPA's own
+    `taxable_land + taxable_building`, so a land correction implies a building correction too if
+    the total is to stay anchored to the (trusted) market value. The override only changes
+    which building value the SAME exemption rule above is applied to; it changes no exemption
+    logic itself.
+
+    **The override cannot make an abated parcel's building value "pass through unchanged."**
+    `other_exempt` is computed from that SAME parcel's historical exempt total (here, its
+    `exempt_building`), and it is always subtracted from whatever gross building value this
+    function is given -- so feeding an abated row's own `exempt_building` back in as the
+    override cancels it to exactly zero, not to itself. This is not a bug to work around with a
+    cleverer override; it is what "carry forward the existing exemption rule" correctly means
+    for a rule that says the abatement's dollars stay exempt. It is right for the reassessment
+    use case ("same methodology, only land revalued") and wrong for anything that means the
+    abatement to have ended. Exclude abated rows from this call entirely; do not rely on an
+    override to preserve them.
 
     Parameters
     ----------
@@ -602,6 +628,11 @@ def carry_forward_exemptions(
         The reform's gross (pre-exemption) land value, e.g. `lycd_land_value`.
     homestead_cap : float
         The tax year's statutory Homestead Exemption, from `tax_year_params(year)`.
+    gross_building_override : pandas.Series, optional
+        Per-parcel gross (pre-exemption) building value to use for the real computation
+        instead of OPA's own `taxable_building + exempt_building`. Aligned to `gdf.index`;
+        missing/negative values are treated as 0. Leave `None` for the existing behavior
+        (building held at OPA's own recorded value, land alone revised).
 
     Returns
     -------
@@ -634,10 +665,10 @@ def carry_forward_exemptions(
     homestead_wiped = full_exmp & hs_active & (other_exempt <= match_tolerance)
     institutional = full_exmp & ~homestead_wiped
 
-    def _apply(new_land: pd.Series):
+    def _apply(new_land: pd.Series, bldg: pd.Series):
         """Building-first application of the dollar exemptions, then the homestead."""
-        b1 = (gross_bldg - other_exempt).clip(lower=0)
-        spill = (other_exempt - gross_bldg).clip(lower=0)
+        b1 = (bldg - other_exempt).clip(lower=0)
+        spill = (other_exempt - bldg).clip(lower=0)
         l1 = (new_land - spill).clip(lower=0)
         hs_ex = pd.Series(np.where(hs_active, np.minimum(homestead_cap, b1 + l1), 0.0), index=gdf.index)
         b2 = (b1 - hs_ex).clip(lower=0)
@@ -647,8 +678,9 @@ def carry_forward_exemptions(
         l2 = l2.where(~institutional, 0.0)
         return l2, b2
 
-    # Guard: OPA's own land through the same rule must reproduce OPA's own taxable total.
-    rec_land, rec_bldg = _apply(gross_land)
+    # Guard: OPA's own land AND OPA's own building through the same rule must reproduce OPA's
+    # own taxable total -- this validates the rule itself, so it never uses the override.
+    rec_land, rec_bldg = _apply(gross_land, gross_bldg)
     rec_total = rec_land + rec_bldg
     match = (rec_total - old_taxable).abs() <= match_tolerance
     match_rate = float(match.mean())
@@ -661,7 +693,11 @@ def carry_forward_exemptions(
         )
 
     new_land = pd.to_numeric(gdf[new_land_col], errors="coerce").fillna(0.0).clip(lower=0)
-    ref_land, ref_bldg = _apply(new_land)
+    if gross_building_override is not None:
+        bldg_for_reform = gross_building_override.reindex(gdf.index).fillna(0.0).clip(lower=0).astype(float)
+    else:
+        bldg_for_reform = gross_bldg
+    ref_land, ref_bldg = _apply(new_land, bldg_for_reform)
 
     diagnostics = {
         "n_homestead_active": int(hs_active.sum()),
@@ -673,7 +709,89 @@ def carry_forward_exemptions(
         "reconstruction_match_rate": match_rate,
         "reconstruction_mismatch_dollars": float((rec_total - old_taxable)[~match].abs().sum()),
         "homestead_cap": float(homestead_cap),
+        "used_gross_building_override": gross_building_override is not None,
     }
     return ExemptionCarryForward(
         ref_land, ref_bldg, ref_land + ref_bldg, institutional, hs_active, other_exempt, diagnostics,
     )
+
+
+def compute_residual_building_value(
+    gdf,
+    land_col: str,
+    market_value_col: str = "market_value",
+) -> "pd.Series":
+    """Gross building value implied by holding `market_value` fixed while revising land.
+
+    Background: a revised land estimate (e.g. LYCD's) routinely exceeds OPA's own implicit
+    land share. Every LYCD notebook currently holds `model_building` at OPA's own recorded
+    value regardless, which means `model_land + model_building` can exceed `market_value` --
+    not a rare edge case: measured on TY2026 with the plain land-only cap, 24.4% of taxable
+    non-vacant parcels already have `lycd_land_value + taxable_building > market_value`, $9.31B
+    of double-counted value in aggregate (see `docs/LYCD_LAND_MODEL_ROADMAP.md`).
+
+    Capping LAND to fix this (`compute_lycd_land_values`'s `cap_include_building`) turns out to
+    reduce to capping land at essentially OPA's own land estimate for most parcels, since
+    `market_value` IS `taxable_land + taxable_building` under OPA's own methodology (true for
+    all but 10 of 583,249 TY2026 parcels) -- it defeats the land correction it was meant to
+    accompany. This function takes the other side of the same identity instead: hold
+    `market_value` (OPA's trusted TOTAL) fixed, and let BUILDING absorb the correction implied
+    by a larger land estimate, exactly as every notebook already does implicitly for the small
+    cohort whose land is capped at exactly `market_value` (documented there as "structure
+    implicitly worth zero") -- this just extends the same idea to every parcel, proportional to
+    how much the land estimate moved, rather than only to the fully-capped extreme.
+
+    This is NOT the same as `model_building = market_value - land` computed carelessly: that
+    naive version compares a GROSS residual (against gross `market_value`) to OPA's actual
+    `taxable_building` column, which is NET of exemptions (Homestead above all) -- silently
+    re-admitting exempted value. Measured on TY2026 that inflated the taxable building base by
+    $43.7B (+40%), touching 99.6% of improved taxable parcels. The fix is sequencing: this
+    function returns a GROSS building value (paired with a GROSS land value), meant to be fed
+    into `carry_forward_exemptions`'s `gross_building_override` -- which re-applies OPA's own
+    exemption rule (homestead, abatement, institutional) to the (land, building) pair AFTER
+    this residual split, so exemptions net out exactly once, not zero or twice.
+
+    **Do not use this for abated parcels, even with an `abated_mask`-style branch that returns
+    their observed `exempt_building` unchanged -- that was tried and does not work.** Feeding
+    an abated row's own `exempt_building` through as this function's output and then into
+    `carry_forward_exemptions`'s `gross_building_override` does NOT preserve it. That function's
+    own exemption-netting computes `other_exempt` from the SAME parcel's historical exempt
+    total and subtracts it from whatever gross building value it is given -- for an abated row
+    that dollar amount IS `exempt_building`, so it cancels back to zero regardless of what this
+    function returns. Measured on TY2026: routing all 14,287 abated parcels through this
+    pipeline (with an abated-passthrough branch that looked correct in isolation) silently
+    zeroed out $16.4B of building value that the four LYCD notebooks currently, correctly,
+    restore via `exempt_building`. Abated parcels must be excluded from the whole
+    residual-and-carry-forward pipeline -- computed and merged in separately, exactly as every
+    LYCD notebook already does -- not routed through it with a clever override. This is a
+    property of `carry_forward_exemptions`'s exemption-netting (it assumes today's exemption
+    RULES persist into the reform, correct for "same methodology, land revalued"), not of this
+    function; it applies to any override, not just this one.
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `land_col` and `market_value_col`.
+    land_col : str
+        The (possibly revised) GROSS land value column -- e.g. `lycd_land_value`, already
+        capped at `market_value` by `compute_lycd_land_values`'s default plain cap, for
+        NON-ABATED rows only (see above -- exclude abated rows before calling this). **This
+        function corrects BUILDING only; it assumes land is already <= market_value and does
+        not enforce that itself.** If land exceeds market_value (an uncapped land column, or a
+        per-row ceiling smaller than the land value used), the residual floors at 0 but land
+        alone still exceeds market_value, so the total can still overshoot -- the
+        `.clip(lower=0)` here is a floor for the ordinary case, not a substitute for the land
+        cap.
+
+    Returns
+    -------
+    pandas.Series
+        Gross (pre-exemption) building value, aligned to `gdf.index`, for use as
+        `carry_forward_exemptions`'s `gross_building_override` on the non-abated subset.
+    """
+    import numpy as np
+    import pandas as pd
+
+    market = pd.to_numeric(gdf[market_value_col], errors="coerce").fillna(0.0).clip(lower=0)
+    land = pd.to_numeric(gdf[land_col], errors="coerce").fillna(0.0).clip(lower=0)
+    return (market - land).clip(lower=0)

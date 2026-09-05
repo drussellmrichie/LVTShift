@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lvt.philadelphia import (  # noqa: E402
     compute_lycd_land_values,
     carry_forward_exemptions,
+    compute_residual_building_value,
 )
 
 
@@ -326,3 +327,85 @@ def test_carry_forward_reconstruction_floor_raises():
     with pytest.raises(ValueError, match="reproduces OPA's taxable total"):
         carry_forward_exemptions(df, new_land_col="new_land", homestead_cap=10_000,
                                  reconstruction_floor=0.99)
+
+
+def test_residual_building_ordinary_parcel():
+    df = pd.DataFrame({"market_value": [200_000.0, 100_000.0], "lycd_land": [90_000.0, 150_000.0]})
+    out = compute_residual_building_value(df, land_col="lycd_land")
+    # 200k - 90k = 110k; 100k - 150k would be negative -> floored at 0
+    assert np.allclose(out.values, [110_000.0, 0.0])
+
+
+def test_carry_forward_override_prevents_double_counting():
+    """The actual point of this mechanism: land + building after exemptions never exceeds
+    market_value on ordinary (non-abated) rows, once building is the exemption-aware residual
+    -- unlike holding building at OPA's own recorded value, which overshoots on several."""
+    df = _exemption_cases()
+    # Row 2 (abated) is excluded from this claim entirely -- see
+    # test_carry_forward_override_cannot_preserve_abated_building for why routing it through
+    # this same call, even with an override, is wrong regardless of the override's value.
+    non_abated = df.drop(index=2)
+    # Big enough to force overshoot on most rows if unaddressed, but clipped to each row's own
+    # market_value -- mirroring the land-only cap compute_lycd_land_values always applies
+    # upstream by default. Without that clip, land itself could exceed market_value (row 3's
+    # market_value is only $80k), which this mechanism does not and cannot fix -- it only
+    # corrects BUILDING; land staying within market_value is a precondition, not a guarantee
+    # this function provides.
+    non_abated = non_abated.assign(new_land=np.minimum(200_000.0, non_abated.market_value.values))
+
+    # Baseline: building held at OPA's own value (no override) -- reproduces the overshoot.
+    baseline = carry_forward_exemptions(non_abated, new_land_col="new_land", homestead_cap=100_000)
+    over_baseline = (baseline.reform_taxable_total - non_abated.market_value) > 1
+    assert over_baseline.any(), "fixture should reproduce the overshoot without the override"
+
+    override = compute_residual_building_value(non_abated, land_col="new_land")
+    fixed = carry_forward_exemptions(non_abated, new_land_col="new_land", homestead_cap=100_000,
+                                     gross_building_override=override)
+    over_fixed = (fixed.reform_taxable_total - non_abated.market_value) > 1
+    assert not over_fixed.any(), "no row should exceed market_value once building is the residual"
+
+    fixed = fixed.reform_taxable_total.reset_index(drop=True)
+    # Row 0 (plain): residual building = market - land = 200k - 200k = 0; total = market exactly.
+    assert fixed.iloc[0] == pytest.approx(200_000.0)
+    # Row 1 (homestead): total = market_value - homestead_cap exactly (relief nets once, not
+    # zero or twice, regardless of which building split it's applied to).
+    assert fixed.iloc[1] == pytest.approx(300_000.0 - 100_000.0)
+    # Row 3 (institutional, was index 4 before dropping row 2): stays fully exempt no matter what.
+    assert fixed.iloc[3] == pytest.approx(0.0)
+
+
+def test_carry_forward_override_cannot_preserve_abated_building():
+    """The mistake this guards against: an abated row's building CANNOT be preserved by
+    supplying its own observed value (exempt_building) as gross_building_override. The
+    function's other_exempt is derived from that SAME row's historical exempt total -- for an
+    abated row that IS exempt_building -- so it cancels the override back to exactly zero,
+    silently zeroing out the building the four LYCD notebooks currently, correctly, restore.
+    Abated rows must be excluded from this call, not routed through it with an override."""
+    # index reset to 0 deliberately -- .iloc[[2]] keeps the original label 2, and an override
+    # Series that isn't aligned to it would silently reindex to all-NaN/0, masking the actual
+    # mechanism this test exists to demonstrate.
+    df = _exemption_cases().iloc[[2]].reset_index(drop=True).copy()   # abated: land 40k, exempt_building 300k
+    df["new_land"] = 500_000.0   # far above OPA's own 40k -- an LYCD-sized correction
+
+    # An override equal to the row's OWN exempt_building looks like "preserve it" but is not.
+    misguided_override = pd.Series([300_000.0], index=df.index)
+    result = carry_forward_exemptions(df, new_land_col="new_land", homestead_cap=100_000,
+                                      gross_building_override=misguided_override)
+    assert result.reform_taxable_building.iloc[0] == pytest.approx(0.0), (
+        "this is the trap, not the expectation: supplying exempt_building as the override "
+        "still zeroes the building, because other_exempt is derived from that same value"
+    )
+    assert result.reform_taxable_total.iloc[0] == pytest.approx(500_000.0)   # land only
+
+
+def test_carry_forward_override_does_not_affect_reconstruction_guard():
+    """The guard validates the exemption RULE against OPA's own real numbers and must not be
+    fooled by a garbage override -- it always uses OPA's own gross building, never the
+    override, which only applies to the real (non-guard) computation."""
+    df = _exemption_cases()
+    df["same_land"] = df.taxable_land + df.exempt_land
+    garbage_override = pd.Series([0.0] * len(df))   # would break every reconstruction if used
+    res = carry_forward_exemptions(df, new_land_col="same_land", homestead_cap=100_000,
+                                   gross_building_override=garbage_override)
+    assert res.diagnostics["reconstruction_match_rate"] == 1.0
+    assert res.diagnostics["used_gross_building_override"] is True
