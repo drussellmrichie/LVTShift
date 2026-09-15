@@ -83,6 +83,37 @@ cohort.
 
 **`model_lycd.ipynb` briefly regressed to a `4 × land` imputation for abated parcels, on a rationale that was wrong even when written.** A version of that notebook reverted from `exempt_building` back to `model_building = 4 × model_land`, reasoning that `exempt_building` was "the post-abatement treatment" and that using it would make the pre-abatement LYCD scenario indistinguishable from `model_lycd_post_abatement.ipynb`. Both premises were false: restoring `exempt_building` only changes the reform-scenario building value, not `current_tax` (which stays land-only under the actual abatement either way), so it is not a post-abatement treatment. And once `model.ipynb` itself moved to `exempt_building`, the reverted `model_lycd.ipynb` differed from the OPA panel by imputation method *and* land source simultaneously — the opposite of the stated design goal of isolating land values alone. Fixed by restoring the shared pattern; see `docs/LYCD_LAND_MODEL_ROADMAP.md`'s former "open items" entry for the before/after numbers.
 
+**The zero-building test finds only full abatements; the abatement stock is larger and runs on
+three schedules.** `split_zero_building_parcels` sees a parcel only when its building line nets
+to $0. Graduated residential abatements after year 1, the 90% commercial/industrial schedule,
+and rehab abatements (which exempt only the value the work added) all leave a taxable building
+line, so that test cannot see them. The full population is `reallocate_land_within_total`'s
+`building_share` exemption kind, and not all of it is abatement.
+`scripts/build_philadelphia_abatement_classification.py` sorts it by reading each parcel's billed
+exempt share of building value across the `assessments` history (2015 on):
+- a 10-point annual step down (relief starting TY2022+) → `new_graduated_residential`
+- a held 0.90 (starting TY2022+) → `new_flat_90_commercial` (reaches commercial rehab, not only new buildings)
+- a held 1.00 → `old_flat_100`; a flat partial share → `old_flat_partial` (mostly rehab)
+- relief present since 2015 or earlier, or a share that *rises* after its first two years →
+  `non_abatement_relief`. An abatement's share can only hold or fall. This relief grows at every
+  reassessment and rarely follows a permit. Its program is unidentified, which sits awkwardly
+  with the LOOP note above; do not label it LOOP without a source.
+
+**Don't use the homestead flag to find owner-occupants among abated parcels.** A property
+with a 10-year residential abatement isn't eligible for the Homestead Exemption until the
+abatement ends (phila.gov), so the flag is empty for exactly those parcels. Use the ownership
+analysis's proxy instead: an individual owner whose mailing address is the property
+(`analysis/ownership/philadelphia/owner_lib.py`, `opa_mailing.parquet`). Check it against the
+homestead flag on non-abated homes, where the flag is valid, as
+`scripts/philadelphia_abatement_phase_in.py` does.
+
+Why this reads history rather than permits: a permit shows only that work was authorised.
+L&I permits are the independent check instead, and the script raises if their agreement
+collapses. Use the live `permits` table; `li_permits` is an archive ending March 2020 and
+cannot see any post-reform abatement. L&I labels apartment buildings "Commercial" by construction
+code, so its commercial/residential field is not the abatement class. Homestead amounts per year
+are inferred from the modal exempt total and asserted against `tax_year_params`.
+
 **Fully exempt SFR parcels are low-value homesteaders, not vacant lots.** ~27K SFR parcels with `market_value <= $80K` have their entire assessed value wiped out by the Homestead Exemption. They show up as `full_exmp=1` and end up in "Vacant Land" if not reclassified. Override 4 moves them to "Single Family Residential — Exempt."
 
 **Kernel name:** On Windows, the `cle-venv-new` kernel may not be registered. Check `jupyter kernelspec list` and use the available kernel (e.g., `python3`) for `nbconvert --execute`.
