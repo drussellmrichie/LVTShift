@@ -278,8 +278,10 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 - `analysis/lycd_reassessment/philadelphia/paper/` — PPI report on what a zone-rate land
   allocation does to bills under the draft land-assessment ordinance (re-split inside OPA's
   total vs. revaluation), and how both land surfaces measure against the ordinance's own
-  uniformity and accuracy tests. Generator-driven: `generate_paper_assets.py` is the only
-  source of numbers; `Report.tex` carries no literals
+  uniformity and accuracy tests, and whether a land-value tax on each surface would be
+  progressive by race and income. The sales-based surface is the one `philly_open_avmkit`'s land
+  roll certifies (asserted by the generator). Generator-driven: `generate_paper_assets.py` is the
+  only source of numbers; `Report.tex` carries no literals
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
 - `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
   a prior audit; a new pass writes a new dated file so the two can be compared. The single-tax
