@@ -18,6 +18,7 @@ from pathlib import Path
 
 __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEARS",
            "ZeroBuildingSplit", "split_zero_building_parcels",
+           "AbatementCohortExpansion", "expand_abatement_cohort", "ABATEMENT_SCHEDULES",
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
@@ -218,6 +219,129 @@ def split_zero_building_parcels(
             )
 
     return ZeroBuildingSplit(out, abated, homestead_zeroed, no_exemption, claim_rate)
+
+
+ABATEMENT_SCHEDULES = (
+    "old_flat_100", "old_flat_partial", "new_graduated_residential",
+    "new_flat_90_commercial", "unresolved",
+)
+
+
+@dataclass(frozen=True)
+class AbatementCohortExpansion:
+    """How the zero-building abated cohort grows once the full schedule classification is read.
+    See `expand_abatement_cohort`."""
+    category: "pd.Series"            # PROPERTY_CATEGORY, with `missed` parcels reclassified
+    abated: "pd.Series"              # zero-building abated OR classified abatement, unioned
+    missed: "pd.Series"              # classified abatement the zero-building test alone missed
+    classified: "pd.Series"          # every parcel scripts/build_philadelphia_abatement_classification.py calls an abatement
+    restored_building: "pd.Series"   # gross (pre-exemption) building value for every row
+
+    def describe(self) -> str:
+        return (
+            f"abatement cohort: {int(self.abated.sum()):,} total "
+            f"({int(self.missed.sum()):,} added by the schedule classification, of "
+            f"{int(self.classified.sum()):,} the script classifies as a construction abatement) "
+            f"| restored building value: ${self.restored_building[self.abated].sum()/1e9:.2f}B"
+        )
+
+
+def expand_abatement_cohort(
+    gdf,
+    category: "pd.Series",
+    abated_mask: "pd.Series",
+    year: int,
+    *,
+    data_dir: str | Path = "data",
+) -> AbatementCohortExpansion:
+    """Add the abatement schedules `split_zero_building_parcels` cannot see to the abated cohort.
+
+    `split_zero_building_parcels` only catches a parcel whose taxable building line nets to $0
+    -- a full (100%-exempt) construction abatement. Three real schedules leave a taxable
+    building line and so are invisible to that test: a graduated residential abatement after
+    year 1 (10-point annual step-down), the 90% commercial/industrial schedule, and a
+    rehabilitation abatement (which exempts only the value the work added). Calling all of
+    these "not abated" understates the post-abatement baseline and leaves their exemption
+    silently carried forward by anything that reads PROPERTY_CATEGORY to decide what counts as
+    an abatement. See `cities/philadelphia/CLAUDE.md`, "The zero-building test finds only full
+    abatements".
+
+    `scripts/build_philadelphia_abatement_classification.py` classifies the full population by
+    reading each parcel's billed exemption history rather than inferring it from a permit; its
+    output (`schedule_type`) is read here, unioned onto the zero-building cohort, and any
+    parcel it calls an abatement is reclassified into `'Abated / Construction Exemption'` if it
+    is not there already.
+
+    **Restored building value.** For every row (not only `abated` ones -- the caller selects),
+    the gross (pre-exemption) building value is `taxable_building + exempt_building`. For a
+    fully-abated, zero-building-line parcel this reduces to `exempt_building` alone (unchanged
+    from the prior behavior). For a schedule this function newly catches -- which still carries
+    a nonzero `taxable_building` -- using `exempt_building` alone would drop that taxable
+    portion; the sum of the two is the parcel's actual assessed improvement, restored whole.
+    Falls back to `market_value - taxable_land` only where both `taxable_building` and
+    `exempt_building` are $0 (mid-construction parcels with no assessed improvement yet).
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `parcel_number`, `taxable_building`, `exempt_building`, `market_value`,
+        `taxable_land`.
+    category : pd.Series
+        The PROPERTY_CATEGORY series as of the caller's most recent override.
+    abated_mask : pd.Series
+        The zero-building abated mask from `split_zero_building_parcels`.
+    year : int
+        Tax year -- selects `abatement_classification_ty<year>.parquet`.
+    data_dir : str or Path
+        Directory holding the classification parquet (default `'data'`, i.e.
+        `cities/philadelphia/data` when run from that directory).
+
+    Returns
+    -------
+    AbatementCohortExpansion
+    """
+    import pandas as pd
+
+    cls_path = Path(data_dir) / f"abatement_classification_ty{year}.parquet"
+    if not cls_path.exists():
+        raise FileNotFoundError(
+            f"{cls_path} not found. Build it with:\n"
+            f"    python scripts/build_philadelphia_abatement_classification.py --year {year}\n"
+            "This is the full abatement-schedule classification (graduated residential, 90% "
+            "commercial, rehab) that the zero-building test alone cannot see -- see "
+            "cities/philadelphia/CLAUDE.md, \"The zero-building test finds only full abatements\"."
+        )
+    cls = pd.read_parquet(cls_path, columns=["parcel_number", "schedule_type"])
+    cls["parcel_number"] = cls["parcel_number"].astype(str).str.zfill(9)
+    schedule_map = cls.drop_duplicates("parcel_number").set_index("parcel_number")["schedule_type"]
+
+    parcel_number = gdf["parcel_number"].astype(str).str.zfill(9)
+    schedule_type = parcel_number.map(schedule_map)
+    classified = schedule_type.isin(ABATEMENT_SCHEDULES)
+    missed = classified & ~abated_mask
+
+    out_category = category.copy()
+    out_category[missed] = "Abated / Construction Exemption"
+    out_abated = abated_mask | missed
+
+    # Guard: this must read the SAME quantity that broke -- whether a classified-abatement
+    # parcel actually ends up in the abated category -- not a reconstruction of it.
+    escaped = classified & (out_category != "Abated / Construction Exemption")
+    if escaped.any():
+        raise ValueError(
+            f"{int(escaped.sum()):,} classified-abatement parcels are not in the "
+            "'Abated / Construction Exemption' category after reclassification -- the merge "
+            "or the reclassification mask is wrong."
+        )
+
+    def _num(col):
+        return pd.to_numeric(gdf[col], errors="coerce").fillna(0.0)
+
+    gross_bldg = _num("taxable_building") + _num("exempt_building")
+    implied_bldg = (_num("market_value") - _num("taxable_land")).clip(lower=0)
+    restored = gross_bldg.where(gross_bldg > 0, implied_bldg)
+
+    return AbatementCohortExpansion(out_category, out_abated, missed, classified, restored)
 
 
 def parcel_cache_path(year: int, data_dir: str | Path = "data") -> Path:
