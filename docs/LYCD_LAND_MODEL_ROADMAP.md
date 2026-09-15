@@ -230,6 +230,24 @@ the *form*, which is what this note is about:
   dominated every dispersion figure and made the fold spread five times wider than it is;
   and candidates must be compared with a paired test, because they all predict the same rows.
 
+## Stage B, second pass (2026-09-12): the certified surface, and what it does to a land tax
+
+`philly_open_avmkit` now builds a land roll and picks its surface by rule
+(`out/land/land_roll_meta.json`): least held-out dispersion among candidates that pass the T1
+improvement-neutrality bar and are not gated. That is **S5, paired-sales comparables** — each
+parcel's ten nearest land sales adjusted for lot size and sub-minimum status by amounts measured
+on matched pairs, reconciled by a weighted median, published as a comp grid
+(`out/land/s5_comps.parquet`). It is statistically tied with the kNN interpolation and beats
+the schedule and OPA. Gradient-boosted trees are more accurate but gated on a statutory ground
+(the location factor has no sale behind it, so it cannot be contested like a comp grid). The
+paper's generator asserts it is reading the certified surface, so a change of pick fails loudly.
+
+The same choice decides whether a land-value tax is progressive by neighbourhood income and
+race: flat to regressive on OPA or LYCD land (LYCD's vacant-land over-valuation lands in poorer,
+non-white block groups), progressive on every sales-based surface under every abatement
+treatment. Mechanism and figures: `scripts/philadelphia_equity_by_land_surface.py` and the
+paper's equity section; do not restate its numbers here.
+
 Lars's unmerged `upstream/docs_land` branch of openavmkit (May 2026) builds a much more
 elaborate schedule painter — six evidence streams, per-neighbourhood tables with size curves,
 and eleven LVT-specific "Lars-Tests" — but its extraction stream and its reconciliation both

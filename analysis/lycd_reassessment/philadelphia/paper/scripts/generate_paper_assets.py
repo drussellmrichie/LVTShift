@@ -7,17 +7,26 @@ SINGLE SOURCE OF NUMERICAL CONTENT for paper/Report.tex. Re-run after any data c
 Then rebuild the PDF. Never type a result number into Report.tex -- add it here as a macro,
 regenerate, and reference the macro.
 
-Reads (all produced by cities/philadelphia/model_lycd_reassessment.ipynb except the ratio
-study, which scripts/vacant_land_ratio_study.py writes, and the tract geometry):
+Reads:
 
     analysis/data/philadelphia_lycd_reassessment_ty2026.csv          per-parcel, both scenarios
+    analysis/data/philadelphia_lycd_reassessment_ty2026_s5.csv       the same, on the certified
+                                                                     sales-based surface
     analysis/data/philadelphia_vacant_land_ratio_study_ty2026.csv    sales test of both surfaces
+    analysis/data/philadelphia_equity_by_surface_*.csv               land-tax equity by surface
     analysis/reports/philadelphia_lycd_reassessment_ty2026/metrics_*.csv
     cities/philadelphia/data/census_tracts.gpq                       map geometry
+    <PHILLY_AVMKIT_ROOT>/.../out/land/                               land evidence and scores
+
+The reassessment exports come from cities/philadelphia/model_lycd_reassessment.ipynb (the _s5
+one with LVT_LAND_SURFACE=s5), the ratio study from scripts/vacant_land_ratio_study.py, and the
+equity CSVs from scripts/philadelphia_equity_by_land_surface.py.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -56,8 +65,10 @@ TAX_YEAR = 2026
 SLUG = f"philadelphia_lycd_reassessment_ty{TAX_YEAR}"
 TY = tax_year_params(TAX_YEAR)
 
-# IAAO Standard on Ratio Studies, table 1-3: COD <= 20 for a heterogeneous class, PRD 0.98-1.03.
+# IAAO Standard on Ratio Studies (2013) Sec. 9.2.4: vacant land COD 5.0-20.0, with 25.0 allowed
+# only for rural or seasonal land, which Philadelphia is not. PRB's acceptable band is +/-0.05.
 IAAO_COD = 20.0
+IAAO_PRB_BAND = 0.05
 # LYCD's vacant multiplier and improved multiplier -- the method's own constants, needed to turn
 # an observed sales ratio into the k the sales would support.
 LYCD_K_VACANT, LYCD_K_IMPROVED = 1.00, 0.20
@@ -110,48 +121,87 @@ def load():
 
 
 # --------------------------------------------------------------------------- #
-# The sales-based surface (Phase 2 of the second analysis)
+# The sales-based surface (the second analysis)
 # --------------------------------------------------------------------------- #
-# philly_open_avmkit owns the land evidence and the held-out scoring; LVTShift reads its
-# outputs read-only (never the reverse). The S2 export is this notebook re-run with
-# LVT_LAND_SURFACE=s2_k20, so every tax-side number for S2 comes through the same code path
-# as LYCD's and differs only in the land rate.
+# philly_open_avmkit owns the land evidence, the held-out scoring and the choice of surface;
+# LVTShift reads its outputs read-only (never the reverse). The tax-side export is this
+# notebook re-run with LVT_LAND_SURFACE=<the certified surface>, so every tax-side number for
+# it comes through the same code path as LYCD's and differs only in the land rate.
 #
-# Point PHILLY_AVMKIT_ROOT at that repo's checkout to build the S2 section elsewhere; the
-# default is this machine's layout. Without it the generator still runs and simply omits the
-# section (load_s2 warns and returns None), so a fresh clone produces a shorter report rather
-# than a wrong one.
+# Point PHILLY_AVMKIT_ROOT at that repo's checkout to build the section elsewhere; the default
+# is this machine's layout. Without it the generator still runs and simply omits the section
+# (load_sales warns and returns None), so a fresh clone produces a shorter report rather than a
+# wrong one.
 PHILLY_AVMKIT_ROOT = Path(os.environ.get("PHILLY_AVMKIT_ROOT", r"C:\projects\philly_open_avmkit"))
 PHILLY_LAND = PHILLY_AVMKIT_ROOT / "notebooks" / "pipeline" / "data" / "us-pa-philadelphia" / "out" / "land"
-S2_SLUG = f"{SLUG}_s2_k20"
-S2_COLS = ["parcel_id", "lycd_land_value", "alloc_land", "alloc_tax_change", "alloc_tax_change_pct",
-           "tax_change", "tax_change_pct", "current_tax", "land_millage", "land_surface_source",
-           "land_surface_psf", "lycd_land_value_lycd", "opa_gross_land", "opa_gross_building",
-           "market_value", "institutional_exempt", "property_category", "exemption_kind",
-           "std_geoid", "dor_area_sqft", "abated", "area_source"]
+# The surface the sibling repo's land roll certifies (asserted against land_roll_meta.json).
+SALES_SURFACE = "s5"
+SALES_SLUG = f"{SLUG}_{SALES_SURFACE}"
+SALES_COLS = ["parcel_id", "lycd_land_value", "alloc_land", "alloc_tax_change", "alloc_tax_change_pct",
+              "tax_change", "tax_change_pct", "current_tax", "land_millage", "land_surface_source",
+              "land_surface_psf", "lycd_land_value_lycd", "opa_gross_land", "opa_gross_building",
+              "market_value", "institutional_exempt", "property_category", "exemption_kind",
+              "std_geoid", "dor_area_sqft", "abated", "area_source"]
+
+# Candidate -> (macro key, table label, short label). Only these rows are shown; every other
+# held-out candidate is counted, not tabulated.
+CANDIDATES = {
+    "S0 OPA assessed land": ("Szero", "OPA assessed land", "OPA"),
+    "S1 LYCD zone-rate allocation": ("Sone", "LYCD zone-rate allocation", "LYCD allocation"),
+    "S3 published schedule": ("Sthree", "Published rate schedule", "Schedule"),
+    "S4 Kolbe extraction (fold-calibrated)": ("Sfourcv", "Extraction from improved sales", "Extraction"),
+    "S8 Albouy-Shin hierarchical Bayesian (NUTS, fold-calibrated)":
+        ("Seight", "Hierarchical Bayesian model", "Bayesian model"),
+    "S2 kNN interpolation (k=20)": ("Stwo", "Interpolation among sales", "Interpolation"),
+    "S5 paired-sales comparables (k=10)": ("Sfive", "Paired-sales comparables", "Paired sales"),
+    "E-GBM openavmkit gradient-boosted trees (fold-fitted)":
+        ("Egbm", "Gradient-boosted trees", "Boosted trees"),
+}
+# land_tests.csv / land_tests_4c_t7_summary.csv use their own short names.
+TEST_KEYS = {"OPA": "Szero", "LYCD allocation": "Sone", "Interpolation (k=20)": "Stwo",
+             "Schedule": "Sthree", "Paired sales": "Sfive", "Gradient-boosted trees": "Egbm"}
+H2H_KEYS = {
+    ("S5 paired-sales comparables (k=10)", "S0 OPA assessed land"): "SfiveVsSzero",
+    ("S5 paired-sales comparables (k=10)", "S3 published schedule"): "SfiveVsSthree",
+    ("S5 paired-sales comparables (k=10)", "S2 kNN interpolation (k=20)"): "SfiveVsStwo",
+    ("E-GBM openavmkit gradient-boosted trees (fold-fitted)", "S5 paired-sales comparables (k=10)"): "EgbmVsSfive",
+    ("S8 Albouy-Shin hierarchical Bayesian (NUTS, fold-calibrated)", "S5 paired-sales comparables (k=10)"):
+        "SeightVsSfive",
+    ("S3 published schedule", "S0 OPA assessed land"): "SthreeVsSzero",
+    ("S4 Kolbe extraction (fold-calibrated)", "S0 OPA assessed land"): "SfourcvVsSzero",
+    ("S0 OPA assessed land", "S1 LYCD zone-rate allocation"): "SzeroVsSone",
+}
 
 
-def load_s2():
-    """The S2 run of the notebook plus the sibling repo's evidence and scores, or None."""
-    p = DATA / f"{S2_SLUG}.csv"
-    if not p.exists() or not (PHILLY_LAND / "scores.csv").exists():
-        print(f"  [warn] S2 inputs missing ({p.name} or philly scores.csv); S2 section skipped")
+def load_sales():
+    """The certified surface's run of the notebook plus the sibling repo's evidence and scores, or None."""
+    p = DATA / f"{SALES_SLUG}.csv"
+    need = ["scores.csv", "head_to_head.csv", "witnesses.csv", "land_tests.csv",
+            "land_tests_4c_t7_summary.csv", "noise_floor_measured.json", "land_roll_meta.json"]
+    missing = [n for n in need if not (PHILLY_LAND / n).exists()]
+    if not p.exists() or missing:
+        print(f"  [warn] sales-surface inputs missing ({p.name} or {missing}); section skipped")
         return None
-    s2 = pd.read_csv(p, usecols=S2_COLS, dtype={"parcel_id": str, "std_geoid": str})
-    out = {
-        "export": s2,
+    meta = json.loads((PHILLY_LAND / "land_roll_meta.json").read_text())
+    assert meta["surface_column"] == SALES_SURFACE, (
+        f"the sibling repo now certifies {meta['surface_column']!r}, not {SALES_SURFACE!r}: "
+        f"re-run model_lycd_reassessment.ipynb with LVT_LAND_SURFACE={meta['surface_column']} "
+        "and update SALES_SURFACE")
+    return {
+        "export": pd.read_csv(p, usecols=SALES_COLS, dtype={"parcel_id": str, "std_geoid": str}),
         "witnesses": pd.read_csv(PHILLY_LAND / "witnesses.csv"),
         "scores": pd.read_csv(PHILLY_LAND / "scores.csv"),
         "h2h": pd.read_csv(PHILLY_LAND / "head_to_head.csv"),
+        "tests": pd.read_csv(PHILLY_LAND / "land_tests.csv"),
+        "prb": pd.read_csv(PHILLY_LAND / "land_tests_4c_t7_summary.csv"),
+        "noise": json.loads((PHILLY_LAND / "noise_floor_measured.json").read_text()),
+        "meta": meta,
     }
-    p_tests = PHILLY_LAND / "land_tests.csv"
-    out["tests"] = pd.read_csv(p_tests) if p_tests.exists() else None
-    return out
 
 
-def s2_section(df, s2, H):
+def sales_section(df, s, H):
     """Macros, tables and the figure for the sales-based surface."""
-    w, sc, h2h, ex = s2["witnesses"], s2["scores"], s2["h2h"], s2["export"]
+    w, sc, h2h, ex = s["witnesses"], s["scores"], s["h2h"], s["export"]
 
     # --- the evidence ---------------------------------------------------------------
     by = w.groupby("kind")["psf_adj"].agg(["size", "median"])
@@ -164,6 +214,8 @@ def s2_section(df, s2, H):
         H.add("WonebOverWone", by.loc["W1b", "median"] / by.loc["W1", "median"], ratio)
         H.add("WtwoOverWone", by.loc["W2", "median"] / by.loc["W1", "median"], ratio)
     H.add("WitSubMinPct", 100 * w["sub_minimum"].mean(), pct)
+    H.add("WitGmaThreeZones", w["gma3"].nunique(), num)
+    H.add("WitPerGmaThreeMedian", w.groupby("gma3").size().median(), lambda x: f"{x:.0f}")
     desc = {"W1": "Sold vacant, still vacant", "W1b": "Sold vacant, since built on",
             "W2": "Sold improved, demolished within a year"}
     tbl = pd.DataFrame({
@@ -175,73 +227,54 @@ def s2_section(df, s2, H):
 
     # --- held-out accuracy ------------------------------------------------------------
     allw = sc[sc["subset"].eq("all witnesses")].set_index("candidate")
-    keymap = {"S0 OPA assessed land": "Szero", "S1 LYCD zone-rate allocation": "Sone",
-              "S2 kNN interpolation (k=20)": "Stwo", "S3 published schedule": "Sthree",
-              "S4 Kolbe extraction (in-sample)": "Sfour",
-              "S4 Kolbe extraction (fold-calibrated)": "Sfourcv"}
-    for cand, nm in keymap.items():
-        if cand in allw.index:
-            r = allw.loc[cand]
-            H.add(f"{nm}TrCod", r["tr_cod"], lambda x: f"{x:.0f}")
-            H.add(f"{nm}RawCod", r["cod"], lambda x: f"{x:.0f}")
-            H.add(f"{nm}TrMedian", r["tr_median"], lambda x: f"{x:.2f}")
-            H.add(f"{nm}TrPrd", r["tr_prd"], lambda x: f"{x:.2f}")
-    r2 = allw.loc["S2 kNN interpolation (k=20)"]
-    H.add("StwoNetLo", r2["cod_net_lo"], lambda x: f"{x:.0f}")
-    H.add("StwoNetHi", r2["cod_net_hi"], lambda x: f"{x:.0f}")
-    r0 = allw.loc["S0 OPA assessed land"]
-    H.add("SzeroNetLo", r0["cod_net_lo"], lambda x: f"{x:.0f}")
-    H.add("SzeroNetHi", r0["cod_net_hi"], lambda x: f"{x:.0f}")
-    H.add("HeldoutN", int(r2["n"]), num)
-    order = ["S0 OPA assessed land", "S1 LYCD zone-rate allocation", "S2 kNN interpolation (k=20)",
-             "S3 published schedule", "S4 Kolbe extraction (fold-calibrated)",
-             "S4 Kolbe extraction (in-sample)"]
-    order = [c for c in order if c in allw.index]
-    short = {"S0 OPA assessed land": "OPA assessed land",
-             "S1 LYCD zone-rate allocation": "LYCD zone-rate allocation",
-             "S2 kNN interpolation (k=20)": "Interpolation among land sales (k=20)",
-             "S3 published schedule": "Published rate schedule",
-             "S4 Kolbe extraction (fold-calibrated)": "Extraction from improved sales",
-             "S4 Kolbe extraction (in-sample)": "Extraction, as published (in-sample)"}
-    brief = {"S0 OPA assessed land": "OPA", "S1 LYCD zone-rate allocation": "LYCD allocation",
-             "S2 kNN interpolation (k=20)": "Interpolation", "S3 published schedule": "Schedule",
-             "S4 Kolbe extraction (fold-calibrated)": "Extraction",
-             "S4 Kolbe extraction (in-sample)": "Extraction (in-sample)"}
-    rows = allw.loc[[c for c in order if c in allw.index]]
+    order = [c for c in CANDIDATES if c in allw.index]
+    for cand in order:
+        nm = CANDIDATES[cand][0]
+        r = allw.loc[cand]
+        H.add(f"{nm}TrCod", r["tr_cod"], lambda x: f"{x:.0f}")
+        H.add(f"{nm}RawCod", r["cod"], lambda x: f"{x:.0f}")
+        H.add(f"{nm}TrMedian", r["tr_median"], lambda x: f"{x:.2f}")
+        H.add(f"{nm}TrPrd", r["tr_prd"], lambda x: f"{x:.2f}")
+        H.add(f"{nm}NetLo", r["cod_net_lo"], lambda x: f"{x:.0f}")
+        H.add(f"{nm}NetHi", r["cod_net_hi"], lambda x: f"{x:.0f}")
+    H.add("HeldoutN", int(allw.loc["S5 paired-sales comparables (k=10)", "n"]), num)
+    H.add("HeldoutCandidates", int(allw["held_out"].sum()), num)
+    H.add("HeldoutUntabulated", int(allw["held_out"].sum()) - sum(allw.loc[order, "held_out"]), num)
+    short = {c: CANDIDATES[c][1] for c in order}
     tbl = pd.DataFrame({
-        "Surface": [short[c] for c in rows.index],
-        "Held out": ["yes" if h else "no" for h in rows["held_out"]],
-        "n": rows["n"].map(num).values,
-        "Median": rows["tr_median"].map(lambda x: f"{x:.2f}").values,
-        "COD, trimmed": rows["tr_cod"].map(lambda x: f"{x:.0f}").values,
-        "COD, raw": rows["cod"].map(lambda x: f"{x:.0f}").values,
-        "PRD": rows["tr_prd"].map(lambda x: f"{x:.2f}").values,
+        "Surface": [short[c] for c in order],
+        "Held out": ["yes" if allw.loc[c, "held_out"] else "no" for c in order],
+        "n": [num(allw.loc[c, "n"]) for c in order],
+        "Median": [f"{allw.loc[c, 'tr_median']:.2f}" for c in order],
+        "COD, trimmed": [f"{allw.loc[c, 'tr_cod']:.0f}" for c in order],
+        "COD, raw": [f"{allw.loc[c, 'cod']:.0f}" for c in order],
+        "PRD": [f"{allw.loc[c, 'tr_prd']:.2f}" for c in order],
     })
     save_table(TABLES / "heldout.tex", tbl, col_format="X l r r r r r", escape=False)
 
-    # Per-stream COD for the surfaces that matter -- where does each one do its work?
+    # Per-stream COD -- where does each surface do its work?
     piv = sc.pivot_table(index="candidate", columns="subset", values="tr_cod")
-    subsets = [s for s in ("W1 only", "W1b only", "W2 only") if s in piv.columns]
-    rows = piv.loc[[c for c in order if c in piv.index], subsets]
-    tbl = pd.DataFrame({"Surface": [short[c] for c in rows.index]})
-    for s, lab in zip(subsets, ("Still vacant", "Since built on", "Teardown")):
-        tbl[lab] = rows[s].map(lambda x: f"{x:.0f}" if np.isfinite(x) else "---").values
+    subsets = [x for x in ("W1 only", "W1b only", "W2 only") if x in piv.columns]
+    stream_rows = [c for c in order if c in piv.index and CANDIDATES[c][0] != "Seight"]
+    tbl = pd.DataFrame({"Surface": [short[c] for c in stream_rows]})
+    for sub, lab in zip(subsets, ("Still vacant", "Since built on", "Teardown")):
+        tbl[lab] = [f"{piv.loc[c, sub]:.0f}" if np.isfinite(piv.loc[c, sub]) else "---" for c in stream_rows]
     save_table(TABLES / "heldout_by_stream.tex", tbl, col_format="X r r r", escape=False)
-    for cand, nm in keymap.items():
-        if cand in piv.index:
-            for s, lab in zip(subsets, ("Wone", "Woneb", "Wtwo")):
-                H.add(f"{nm}TrCod{lab}", piv.loc[cand, s], lambda x: f"{x:.0f}")
+    for cand in stream_rows:
+        for sub, lab in zip(subsets, ("Wone", "Woneb", "Wtwo")):
+            H.add(f"{CANDIDATES[cand][0]}TrCod{lab}", piv.loc[cand, sub], lambda x: f"{x:.0f}")
+
+    # The measured transaction-noise floor: the COD a perfect surface would score on these sales.
+    band = s["noise"]["measured_perfect_surface_cod_band"]
+    H.add("NoiseCodLo", band[0], lambda x: f"{x:.0f}")
+    H.add("NoiseCodHi", band[1], lambda x: f"{x:.0f}")
+    H.add("NoiseRepeatPairs", s["noise"]["repeat_sales"]["n_pairs"], num)
+    H.add("NoiseNeighbourPairs", s["noise"]["neighbour_pairs_30m"]["n_pairs"], num)
 
     # --- head to head -------------------------------------------------------------------
-    hk = {("S2 kNN interpolation (k=20)", "S3 published schedule"): "StwoVsSthree",
-          ("S2 kNN interpolation (k=20)", "S0 OPA assessed land"): "StwoVsSzero",
-          ("S3 published schedule", "S0 OPA assessed land"): "SthreeVsSzero",
-          ("S0 OPA assessed land", "S1 LYCD zone-rate allocation"): "SzeroVsSone",
-          ("S2 kNN interpolation (k=20)", "S4 Kolbe extraction (fold-calibrated)"): "StwoVsSfourcv",
-          ("S4 Kolbe extraction (fold-calibrated)", "S0 OPA assessed land"): "SfourcvVsSzero"}
     rows = []
     for _, r in h2h.iterrows():
-        nm = hk.get((r["a"], r["b"]))
+        nm = H2H_KEYS.get((r["a"], r["b"]))
         if nm is None:
             continue
         H.add(f"{nm}Diff", r["cod_diff"], lambda x: f"{x:+.1f}")
@@ -249,25 +282,40 @@ def s2_section(df, s2, H):
         H.add(f"{nm}Lo", r["lo"], lambda x: f"{x:+.1f}")
         H.add(f"{nm}Hi", r["hi"], lambda x: f"{x:+.1f}")
         H.add(f"{nm}P", r["p_a_better"], lambda x: f"{x:.3f}")
-        rows.append({"A": brief[r["a"]], "B": brief[r["b"]],
+        rows.append({"order": list(H2H_KEYS.values()).index(nm),
+                     "A": CANDIDATES[r["a"]][2], "B": CANDIDATES[r["b"]][2],
                      "COD difference": f"{r['cod_diff']:+.1f}",
                      "95\\% interval": f"[{r['lo']:+.1f}, {r['hi']:+.1f}]",
                      "P(A better)": f"{r['p_a_better']:.3f}"})
-    save_table(TABLES / "head_to_head.tex", pd.DataFrame(rows), col_format="X X r r r", escape=False)
+    assert len(rows) == len(H2H_KEYS), "a head-to-head pair the report cites is missing from head_to_head.csv"
+    out = pd.DataFrame(rows).sort_values("order").drop(columns="order")
+    save_table(TABLES / "head_to_head.tex", out, col_format="X X r r r", escape=False)
 
-    # --- what S2 does to the roll ---------------------------------------------------------
+    # --- selection: the rule the land roll applies, and what it held out ----------------
+    meta = s["meta"]
+    bar = re.search(r">=\s*([0-9.]+)%", meta["selection"]["rule"])
+    H.add("TOneBar", float(bar.group(1)), pct0)
+    gbm = [c for c in meta["selection"]["considered"] if c["column"] == "e_gbm"][0]
+    H.add("EgbmGated", "yes" if gbm["gated"] else "no")
+
+    # --- vertical equity of each surface (IAAO PRB) ----------------------------------------
+    for _, r in s["prb"].iterrows():
+        nm = TEST_KEYS.get(r["candidate"])
+        if nm is not None:
+            H.add(f"{nm}Prb", r["prb"], lambda x: f"{x:+.3f}")
+    H.add("IaaoPrbBand", IAAO_PRB_BAND, lambda x: f"{x:.2f}")
+
+    # --- what the certified surface does to the roll ---------------------------------------
     b = ex[(ex["institutional_exempt"] == 0) & (ex["current_tax"] > 0)]
-    H.add("StwoKnnParcels", int(ex["land_surface_source"].eq("knn").sum()), num)
-    H.add("StwoKnnValuePct",
-          100 * ex.loc[ex["land_surface_source"].eq("knn"), "market_value"].sum() / ex["market_value"].sum(), pct)
-    H.add("StwoLandBaseB", ex["lycd_land_value"].sum() / 1e9, usd_b)
+    knn = ex["land_surface_source"].eq("knn")
+    H.add("SfiveKnnParcels", int(knn.sum()), num)
+    H.add("SfiveKnnValuePct", 100 * ex.loc[knn, "market_value"].sum() / ex["market_value"].sum(), pct)
+    H.add("SfiveLandBaseB", ex["lycd_land_value"].sum() / 1e9, usd_b)
     H.add("LycdLandBaseB", ex["lycd_land_value_lycd"].sum() / 1e9, usd_b)
     H.add("OpaLandBaseB", ex["opa_gross_land"].sum() / 1e9, usd_b)
-    H.add("StwoOverOpaLand", ex["lycd_land_value"].sum() / ex["opa_gross_land"].sum(), ratio)
-    H.add("StwoOverLycdLand", ex["lycd_land_value"].sum() / ex["lycd_land_value_lycd"].sum(), ratio)
+    H.add("SfiveOverOpaLand", ex["lycd_land_value"].sum() / ex["opa_gross_land"].sum(), ratio)
+    H.add("SfiveOverLycdLand", ex["lycd_land_value"].sum() / ex["lycd_land_value_lycd"].sum(), ratio)
     imp = ex[ex["opa_gross_building"] > 0].copy()
-    share = imp["lycd_land_value"] / imp["market_value"].replace(0, np.nan)
-    H.add("StwoImprovedLandShareMedian", share.median(), lambda x: f"{x:.2f}")
     # Sec. 3(c) on the sales-based surface: how often does land ALONE exceed OPA's total
     # assessment before the cap binds? Measured on the pre-cap value (rate x area), since the
     # exported land value is already capped. Split out the cohort whose lot area is itself
@@ -277,91 +325,85 @@ def s2_section(df, s2, H):
     imp["pre_cap"] = imp["land_surface_psf"] * imp["dor_area_sqft"]
     over = imp["pre_cap"] > imp["market_value"]
     condo_like = imp["area_source"].eq("knn")
-    H.add("StwoPreCapExceeds", int(over.sum()), num)
-    H.add("StwoPreCapExceedsPct", 100 * over.mean(), pct)
-    H.add("StwoPreCapExceedsCondo", int((over & condo_like).sum()), num)
-    H.add("StwoPreCapExceedsCore", int((over & ~condo_like).sum()), num)
-    H.add("StwoPreCapExceedsCorePct", 100 * (over & ~condo_like).sum() / (~condo_like).sum(), pct)
-    H.add("StwoCapRemovedB", (imp.loc[over, "pre_cap"] - imp.loc[over, "market_value"]).sum() / 1e9, usd_b)
-    H.add("StwoCapRemovedCoreB",
+    H.add("SfivePreCapExceeds", int(over.sum()), num)
+    H.add("SfivePreCapExceedsCondo", int((over & condo_like).sum()), num)
+    H.add("SfivePreCapExceedsCore", int((over & ~condo_like).sum()), num)
+    H.add("SfivePreCapExceedsCorePct", 100 * (over & ~condo_like).sum() / (~condo_like).sum(), pct)
+    H.add("SfiveCapRemovedB", (imp.loc[over, "pre_cap"] - imp.loc[over, "market_value"]).sum() / 1e9, usd_b)
+    H.add("SfiveCapRemovedCoreB",
           (imp.loc[over & ~condo_like, "pre_cap"] - imp.loc[over & ~condo_like, "market_value"]).sum() / 1e9, usd_b)
-    H.add("StwoKnnFillPsf", ex.loc[ex["land_surface_source"].eq("knn"), "land_surface_psf"].median(), lambda x: f"${x:,.0f}")
-    H.add("StwoJoinedPsf", ex.loc[ex["land_surface_source"].eq("surface"), "land_surface_psf"].median(), lambda x: f"${x:,.0f}")
+    H.add("SfiveKnnFillPsf", ex.loc[knn, "land_surface_psf"].median(), lambda x: f"${x:,.0f}")
+    H.add("SfiveJoinedPsf", ex.loc[ex["land_surface_source"].eq("surface"), "land_surface_psf"].median(),
+          lambda x: f"${x:,.0f}")
 
-    # reading C under S2
+    # reading C under the sales-based surface
     moved = b["alloc_tax_change"].abs() > 0.01
-    H.add("StwoCMoved", int(moved.sum()), num)
-    H.add("StwoCMovedPct", 100 * moved.mean(), pct)
+    H.add("SfiveCMoved", int(moved.sum()), num)
+    H.add("SfiveCMovedPct", 100 * moved.mean(), pct)
     lev = b["alloc_tax_change"].sum()
-    H.add("StwoCLevyAbsM", abs(lev) / 1e6, lambda x: f"${x:,.1f}M")
-    H.add("StwoCLevySign", "falls" if lev < 0 else "rises")
-    H.add("StwoCLevyPct", 100 * lev / ex["current_tax"].sum(), lambda x: f"{x:+.2f}%")
+    H.add("SfiveCLevyAbsM", abs(lev) / 1e6, lambda x: f"${x:,.1f}M")
+    H.add("SfiveCLevySign", "falls" if lev < 0 else "rises")
+    H.add("SfiveCLevyPct", 100 * lev / ex["current_tax"].sum(), lambda x: f"{x:+.2f}%")
     ab = b[moved & (b["abated"] == 1)]
-    H.add("StwoCAbatedMedianPct", ab["alloc_tax_change_pct"].median(), lambda x: f"{x:+.1f}%")
-    # reading A under S2
-    H.add("StwoAMillage", float(ex["land_millage"].iloc[0]), lambda x: f"{x:.4f}")
-    H.add("StwoADownTenPct", 100 * (b["tax_change_pct"] < -10).mean(), pct)
-    H.add("StwoAUpTenPct", 100 * (b["tax_change_pct"] > 10).mean(), pct)
+    H.add("SfiveCAbatedMedianPct", ab["alloc_tax_change_pct"].median(), lambda x: f"{x:+.1f}%")
+    # reading A under the sales-based surface
     vac = b[b["property_category"] == "Vacant Land"]
-    H.add("StwoAVacantMedianPct", vac["tax_change_pct"].median(), lambda x: f"{x:+,.0f}%")
-    H.add("StwoAVacantShareOfShift",
+    H.add("SfiveAVacantMedianPct", vac["tax_change_pct"].median(), lambda x: f"{x:+,.0f}%")
+    H.add("SfiveAVacantShareOfShift",
           100 * vac["tax_change"].clip(lower=0).sum() / b["tax_change"].clip(lower=0).sum(), pct)
 
     # --- incentive and uniformity tests -------------------------------------------------
-    t = s2.get("tests")
-    if t is not None and len(t):
-        moran_col = [c for c in t.columns if c.startswith("T4 Moran")][0]
-        # Short headers: four numeric columns with long labels starve the X column, and the
-        # surface names then hyphenate. The caption carries the definitions.
-        disp = pd.DataFrame({
-            "Surface": t["candidate"].values,
-            "T1 neutral": [f"{v:.0f}\\%" for v in t["T1 rate-neutral %"]],
-            "T2 COD": [f"{v:.0f}" for v in t["T2 within-cluster COD"]],
-            "T3 cross / within": [f"{a:.0f}\\% / {b:.0f}\\%" for a, b in
-                                  zip(t["T3 cross-cell smooth %"], t["T3 within-cell smooth %"])],
-            "T4 Moran $I$": [f"{v:+.2f}" for v in t[moran_col]],
-        })
-        save_table(TABLES / "land_tests.tex", disp, col_format="X r r r r", escape=False)
-        key = {"OPA": "Szero", "LYCD allocation": "Sone",
-               "Interpolation (k=20)": "Stwo", "Schedule": "Sthree"}
-        for _, r in t.iterrows():
-            nm = key.get(r["candidate"])
-            if nm is None:
-                continue
-            H.add(f"{nm}TOne", r["T1 rate-neutral %"], pct)
-            H.add(f"{nm}TTwo", r["T2 within-cluster COD"], lambda x: f"{x:.0f}")
-            H.add(f"{nm}TThreeCross", r["T3 cross-cell smooth %"], pct)
-            H.add(f"{nm}TThreeWithin", r["T3 within-cell smooth %"], pct)
-            H.add(f"{nm}TFour", r[moran_col], lambda x: f"{x:+.2f}")
-            H.add(f"{nm}TFourP", r["T4 p"], lambda x: f"{x:.2f}")
-        H.add("TOnePairs", int(t["T1 pairs"].max()), num)
-        # The tests' own parameters, carried alongside their results so the caption cites
-        # generated values and cannot drift if the tests are retuned.
-        r0 = t.iloc[0]
-        H.add("TPairRadiusM", r0["param_pair_radius_m"], lambda x: f"{x:.0f}")
-        H.add("TSizeMatchPct", r0["param_size_match_pct"], pct0)
-        H.add("TNeutralityTolPct", r0["param_neutrality_tol_pct"], pct0)
-        H.add("TSmoothJumpPct", r0["param_smooth_jump_pct"], pct0)
+    t = s["tests"]
+    t = t[t["candidate"].isin(TEST_KEYS)]
+    moran_col = [c for c in t.columns if c.startswith("T4 Moran")][0]
+    # Short headers: four numeric columns with long labels starve the X column, and the
+    # surface names then hyphenate. The caption carries the definitions.
+    disp = pd.DataFrame({
+        "Surface": t["candidate"].values,
+        "T1 neutral": [f"{v:.0f}\\%" for v in t["T1 rate-neutral %"]],
+        "T2 COD": [f"{v:.0f}" for v in t["T2 within-cluster COD"]],
+        "T3 cross / within": [f"{a:.0f}\\% / {c:.0f}\\%" for a, c in
+                              zip(t["T3 cross-cell smooth %"], t["T3 within-cell smooth %"])],
+        "T4 Moran $I$": [f"{v:+.2f}" for v in t[moran_col]],
+    })
+    save_table(TABLES / "land_tests.tex", disp, col_format="X r r r r", escape=False)
+    for _, r in t.iterrows():
+        nm = TEST_KEYS[r["candidate"]]
+        H.add(f"{nm}TOne", r["T1 rate-neutral %"], pct0)
+        H.add(f"{nm}TTwo", r["T2 within-cluster COD"], lambda x: f"{x:.0f}")
+        H.add(f"{nm}TThreeCross", r["T3 cross-cell smooth %"], pct0)
+        H.add(f"{nm}TThreeWithin", r["T3 within-cell smooth %"], pct0)
+        H.add(f"{nm}TFour", r[moran_col], lambda x: f"{x:+.2f}")
+        H.add(f"{nm}TFourP", r["T4 p"], lambda x: f"{x:.2f}")
+    H.add("TOnePairs", int(t["T1 pairs"].max()), num)
+    # The tests' own parameters, carried alongside their results so the caption cites
+    # generated values and cannot drift if the tests are retuned.
+    r0 = t.iloc[0]
+    H.add("TPairRadiusM", r0["param_pair_radius_m"], lambda x: f"{x:.0f}")
+    H.add("TSizeMatchPct", r0["param_size_match_pct"], pct0)
+    H.add("TNeutralityTolPct", r0["param_neutrality_tol_pct"], pct0)
+    H.add("TSmoothJumpPct", r0["param_smooth_jump_pct"], pct0)
 
-    fig_s2(allw, order, short, ex)
+    fig_sales_surface(allw, order, short, ex)
     return ex
 
 
-def fig_s2(allw, order, short, ex):
-    """Left: held-out dispersion by surface. Right: where the sales-based surface departs
+def fig_sales_surface(allw, order, short, ex):
+    """Left: held-out dispersion by surface. Right: where the certified surface departs
     from LYCD, by tract."""
     try:
         import geopandas as gpd
     except ImportError:
         gpd = None
-    fig, axes = plt.subplots(1, 2, figsize=(7.4, 3.9), gridspec_kw={"width_ratios": [1.0, 1.15]})
-    rows = allw.loc[[c for c in order if c in allw.index]]
+    fig, axes = plt.subplots(1, 2, figsize=(7.4, 4.1), gridspec_kw={"width_ratios": [1.0, 1.15]})
+    rows = allw.loc[order]
     labels = [short[c].replace(" (", "\n(") for c in rows.index]
-    colours = [PPI_COLORS["accent"] if "Interpolation" in short[c] else PPI_COLORS["primary"]
+    colours = [PPI_COLORS["accent"] if CANDIDATES[c][0] == "Sfive"
+               else PPI_COLORS["light"] if CANDIDATES[c][0] == "Egbm" else PPI_COLORS["primary"]
                for c in rows.index]
     axes[0].barh(labels, rows["tr_cod"], color=colours)
     axes[0].axvline(IAAO_COD, color=PPI_COLORS["dark"], lw=1.0, ls="--")
-    axes[0].annotate("IAAO", (IAAO_COD + 1, 0.55), fontsize=7, color=PPI_COLORS["dark"])
+    axes[0].annotate("IAAO", (IAAO_COD + 1, -0.25), fontsize=7, color=PPI_COLORS["dark"])
     axes[0].invert_yaxis()
     axes[0].set_xlabel("held-out COD, trimmed (lower is better)")
     axes[0].tick_params(axis="y", labelsize=7)
@@ -371,9 +413,9 @@ def fig_s2(allw, order, short, ex):
         geo["tract_geoid"] = geo["GEOID"].astype(str)
         t = ex.dropna(subset=["std_geoid"]).copy()
         t["tract_geoid"] = t["std_geoid"].astype(str).str.zfill(12).str[:11]
-        agg = t.groupby("tract_geoid").agg(s2=("lycd_land_value", "sum"),
+        agg = t.groupby("tract_geoid").agg(sales=("lycd_land_value", "sum"),
                                           lycd=("lycd_land_value_lycd", "sum"))
-        agg["ratio"] = agg["s2"] / agg["lycd"].replace(0, np.nan)
+        agg["ratio"] = agg["sales"] / agg["lycd"].replace(0, np.nan)
         g = geo.merge(agg, on="tract_geoid", how="inner")
         g.plot(column=np.log2(g["ratio"].clip(0.25, 4.0)), cmap="RdBu_r", vmin=-2, vmax=2,
                linewidth=0.1, edgecolor="white", ax=axes[1], legend=True,
@@ -382,7 +424,7 @@ def fig_s2(allw, order, short, ex):
                             "extend": "both"})
         axes[1].set_axis_off()
     fig.tight_layout()
-    fig.savefig(FIGS / "s2_surface.pdf")
+    fig.savefig(FIGS / "sales_surface.pdf")
     plt.close(fig)
 
 
@@ -513,8 +555,8 @@ def uniformity_tests(df, H):
     # own total, i.e. OPA's own vacant value, so the raw method's vacant leg never reaches the roll.
     SURFACES = [("OPA", "opa_gross_land"), ("LYCD", "lycd_land_value"), ("Resplit", "alloc_land")]
     # The sales-based surface, when its run exists (merged onto df in main()).
-    if "s2_land" in d.columns:
-        SURFACES += [("Stwo", "s2_land"), ("StwoResplit", "s2_alloc_land")]
+    if "sales_land" in d.columns:
+        SURFACES += [("Sfive", "sales_land"), ("SfiveResplit", "sales_alloc_land")]
     for name, col in SURFACES:
         d[f"psf_{name}"] = land_psf(d, col)
 
@@ -566,9 +608,9 @@ def uniformity_tests(df, H):
         "LYCD, re-split": [f"{v:.2f}" for v in pick("Resplit")["value"].values],
     })
     fmt = "X r r r r"
-    if "Stwo" in set(tbl.surface):
-        out["Sales, raw"] = [f"{v:.2f}" for v in pick("Stwo")["value"].values]
-        out["Sales, re-split"] = [f"{v:.2f}" for v in pick("StwoResplit")["value"].values]
+    if "Sfive" in set(tbl.surface):
+        out["Sales, raw"] = [f"{v:.2f}" for v in pick("Sfive")["value"].values]
+        out["Sales, re-split"] = [f"{v:.2f}" for v in pick("SfiveResplit")["value"].values]
         fmt = "X r r r r r r"
     save_table(TABLES / "uniformity.tex", out, col_format=fmt, escape=False)
     return d
@@ -591,10 +633,10 @@ def default_ratio_collapse(df, H):
     at20_lycd = 100 * r_lycd.between(0.1995, 0.2005).mean()
     H.add("DefaultRatioOpaPct", at20_opa, pct)
     H.add("DefaultRatioLycdPct", at20_lycd, pct)
-    if "s2_alloc_land" in d.columns:
-        r_s2 = (d["s2_alloc_land"] / d["market_value"]).round(4)
-        H.add("DefaultRatioStwoPct", 100 * r_s2.between(0.1995, 0.2005).mean(), pct)
-        H.add("StwoResplitLandShareMedian", r_s2.median(), lambda x: f"{x:.2f}")
+    if "sales_alloc_land" in d.columns:
+        r_sales = (d["sales_alloc_land"] / d["market_value"]).round(4)
+        H.add("DefaultRatioSfivePct", 100 * r_sales.between(0.1995, 0.2005).mean(), pct)
+        H.add("SfiveResplitLandShareMedian", r_sales.median(), lambda x: f"{x:.2f}")
     H.add("DefaultRatioImprovedParcels", len(d), num)
     H.add("ImprovedSharePct", 100 * len(d) / len(df), pct)
     # The modal bin width matters for the claim: report the top mode of each surface.
@@ -764,6 +806,174 @@ def table_equity(b, H):
 
 
 # --------------------------------------------------------------------------- #
+# Who a land tax would fall on, by land surface
+# --------------------------------------------------------------------------- #
+# Read from scripts/philadelphia_equity_by_land_surface.py's outputs. Strata are block-group
+# quintiles of median household income and non-white share over taxable homes; every figure is
+# an aggregate change (sum of new bills over sum of current) for the group.
+EQ_SURFACES = [  # (label in the equity CSVs, macro key, display name)
+    ("OPA land", "Opa", "OPA"),
+    ("LYCD land", "Lycd", "LYCD allocation"),
+    ("S2 kNN (k=20)", "Stwo", "Interpolation"),
+    ("S5 paired-sales (certified)", "Sfive", "Paired sales"),
+    ("E-GBM (most accurate)", "Egbm", "Boosted trees"),
+]
+EQ_TREATMENTS = [  # (label in the CSVs, macro key, display name)
+    ("ends", "Ends", "Reform taxes abated buildings"),
+    ("kept", "Kept", "Reform keeps the abatement"),
+    ("expired", "Expired", "Abatements already expired"),
+]
+EQ_GROUPS = [  # (stratum, level, macro key, display name)
+    ("inc_q", "Q1 (poorest)", "Poor", "Poorest"),
+    ("inc_q", "Q5 (richest)", "Rich", "Richest"),
+    ("min_q", "Q1 (whitest)", "White", "Whitest"),
+    ("min_q", "Q5 (most non-white)", "Nonwhite", "Most non-white"),
+]
+
+
+def load_equity():
+    names = ["strata", "summary", "bg_corr", "knn", "edges"]
+    paths = {n: DATA / f"philadelphia_equity_by_surface_{n}.csv" for n in names}
+    missing = [p.name for p in paths.values() if not p.exists()]
+    if missing:
+        print(f"  [warn] equity inputs missing ({missing}); run scripts/philadelphia_equity_by_land_surface.py")
+        return None
+    return {n: pd.read_csv(p) for n, p in paths.items()}
+
+
+def _eq_cell(st, surface, treatment, stratum, level, col):
+    r = st[(st.surface == surface) & (st.treatment == treatment) & (st.stratum == stratum) & (st.level == level)]
+    assert len(r) == 1, (surface, treatment, stratum, level)
+    return float(r[col].iloc[0])
+
+
+def signed_pct(x):
+    return f"{x:+.1f}%"
+
+
+def equity_section(eq, H):
+    st, corr, knn, edges = eq["strata"], eq["bg_corr"], eq["knn"], eq["edges"]
+
+    # Quintile boundaries, for the method paragraph.
+    e = edges.set_index("quantile")
+    H.add("EqIncPoorTop", e.loc[0.2, "median_income"], money)
+    H.add("EqIncRichBottom", e.loc[0.8, "median_income"], money)
+    H.add("EqNonwhiteWhiteTop", e.loc[0.2, "nonwhite_pct"], lambda x: f"{x:.0f}%")
+    H.add("EqNonwhiteMostBottom", e.loc[0.8, "nonwhite_pct"], lambda x: f"{x:.0f}%")
+
+    # Every surface x treatment: homes and all-parcel change for the four end groups, and the
+    # lowest share of homes paying less in any income, race or Black-share group.
+    stable = 0
+    for s_lab, s_key, _ in EQ_SURFACES:
+        signs = set()
+        for t_lab, t_key, _ in EQ_TREATMENTS:
+            vals = {}
+            for stratum, level, g_key, _ in EQ_GROUPS:
+                vals[g_key] = _eq_cell(st, s_lab, t_lab, stratum, level, "homes_pct")
+                H.add(f"Eq{s_key}{t_key}Homes{g_key}", vals[g_key], signed_pct)
+                H.add(f"Eq{s_key}{t_key}All{g_key}", _eq_cell(st, s_lab, t_lab, stratum, level, "all_pct"), signed_pct)
+            sub = st[(st.surface == s_lab) & (st.treatment == t_lab)]
+            H.add(f"Eq{s_key}{t_key}MinWin", sub["homes_win_pct"].min(), lambda x: f"{x:.0f}%")
+            signs.add((np.sign(vals["Rich"] - vals["Poor"]), np.sign(vals["Nonwhite"] - vals["White"])))
+        stable += len(signs) == 1
+    # The OPA and LYCD rows come from the split-rate notebooks, the sales-based rows from the
+    # reassessment notebook's exemption rule. LYCD run through both says whether that matters.
+    diffs = [abs(_eq_cell(st, "LYCD land", "ends", stratum, level, col)
+                 - _eq_cell(st, "LYCD land, reassessment rules", "ends", stratum, level, col))
+             for stratum, level, _, _ in EQ_GROUPS for col in ("homes_pct", "all_pct")]
+    H.add("EqLycdRulesMaxDiff", max(diffs), lambda x: f"{x:.1f}")
+    # Report.tex states the orderings hold on every surface under every treatment; make that
+    # claim fail loudly rather than go stale.
+    assert stable == len(EQ_SURFACES), (
+        f"the richest-poorest or whitest-most-non-white ordering flips with the abatement treatment "
+        f"on {len(EQ_SURFACES) - stable} surface(s); revise sec:equity and the abstract")
+    H.add("EqSurfaces", len(EQ_SURFACES), num)
+
+    # The certified surface's decomposition: flat-rate revaluation, then the split rate on top.
+    for s_lab, s_key in (("S5 paired-sales (certified)", "Sfive"), ("E-GBM (most accurate)", "Egbm")):
+        for t_lab, t_key in (("revaluation only", "Reval"), ("split-rate increment", "Split")):
+            for stratum, level, g_key, _ in EQ_GROUPS:
+                H.add(f"Eq{s_key}{t_key}Homes{g_key}", _eq_cell(st, s_lab, t_lab, stratum, level, "homes_pct"),
+                      signed_pct)
+
+    # What drives the all-parcel change: vacant land's contribution, in points of the group's bill.
+    for s_lab, s_key in (("LYCD land", "Lycd"), ("S5 paired-sales (certified)", "Sfive")):
+        for stratum, level, g_key, _ in EQ_GROUPS:
+            H.add(f"Eq{s_key}Vacant{g_key}",
+                  _eq_cell(st, s_lab, "ends", stratum, level, "contrib_vacant land"), lambda x: f"{x:+.0f}")
+
+    # Block-group correlations of the homes change with income and non-white share.
+    c = corr[(corr.treatment == "ends") & (corr.scope == "homes")].set_index("surface")
+    for s_lab, s_key, _ in EQ_SURFACES:
+        H.add(f"Eq{s_key}RInc", c.loc[s_lab, "r_log_income"], lambda x: f"{x:+.2f}")
+        H.add(f"Eq{s_key}RNonwhite", c.loc[s_lab, "r_nonwhite"], lambda x: f"{x:+.2f}")
+    H.add("EqBlockGroups", int(c["n_block_groups"].iloc[0]), num)
+
+    # Parcels KNN-filled outside the AVM universe: how much of any group, and how much they move it.
+    H.add("EqKnnMaxSharePct", knn["knn_share_pct"].max(), pct)
+    H.add("EqKnnMaxShift", (knn["homes_pct"] - knn["homes_pct_without_knn"]).abs().max(), lambda x: f"{x:.1f}")
+
+    # Table: the five surfaces under the standard treatment, homes and all taxable parcels.
+    def panel(col):
+        out = []
+        for s_lab, _, s_name in EQ_SURFACES:
+            cells = [f"{_eq_cell(st, s_lab, 'ends', stratum, level, col):+.1f}\\%"
+                     for stratum, level, _, _ in EQ_GROUPS]
+            out.append(" & ".join([s_name] + cells) + r" \\")
+        return out
+    head = " & ".join(["Land values"] + [g[3] for g in EQ_GROUPS]) + r" \\"
+    lines = [r"\begin{tabularx}{\linewidth}{@{} X r r r r @{}}", r"\toprule",
+             r" & \multicolumn{2}{c}{Income} & \multicolumn{2}{c}{Non-white share} \\",
+             r"\cmidrule(lr){2-3}\cmidrule(l){4-5}", head, r"\midrule",
+             r"\multicolumn{5}{@{}l}{\emph{Homes}} \\"] + panel("homes_pct") + \
+            [r"\midrule", r"\multicolumn{5}{@{}l}{\emph{All taxable parcels}} \\"] + panel("all_pct") + \
+            [r"\bottomrule", r"\end{tabularx}"]
+    (TABLES / "equity_surfaces.tex").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    # Table: every surface under every abatement treatment, homes only, plus the lowest win rate.
+    head = " & ".join(["Abatement treatment"] + [g[3] for g in EQ_GROUPS] + ["Lowest share paying less"]) + r" \\"
+    lines = [r"\begin{tabularx}{\linewidth}{@{} X r r r r r @{}}", r"\toprule", head]
+    for s_lab, _, s_name in EQ_SURFACES:
+        lines += [r"\midrule", rf"\multicolumn{{6}}{{@{{}}l}}{{\emph{{{s_name}}}}} \\"]
+        for t_lab, _, t_name in EQ_TREATMENTS:
+            cells = [f"{_eq_cell(st, s_lab, t_lab, stratum, level, 'homes_pct'):+.1f}\\%"
+                     for stratum, level, _, _ in EQ_GROUPS]
+            win = st[(st.surface == s_lab) & (st.treatment == t_lab)]["homes_win_pct"].min()
+            lines.append(" & ".join([t_name] + cells + [f"{win:.0f}\\%"]) + r" \\")
+    lines += [r"\bottomrule", r"\end{tabularx}"]
+    (TABLES / "equity_abatement.tex").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    fig_equity_profile(st)
+
+
+def fig_equity_profile(st):
+    """Homes' aggregate change across all five income and non-white-share quintiles, by surface."""
+    colours = {"Opa": PPI_COLORS["primary"], "Lycd": PPI_COLORS["gray"], "Stwo": PPI_COLORS["light"],
+               "Sfive": PPI_COLORS["accent"], "Egbm": PPI_COLORS["dark"]}
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.3), sharey=True)
+    panels = ((axes[0], "inc_q", ["Q1 (poorest)", "Q2", "Q3", "Q4", "Q5 (richest)"],
+               ["poorest", "2", "3", "4", "richest"], "block-group income quintile"),
+              (axes[1], "min_q", ["Q1 (whitest)", "Q2", "Q3", "Q4", "Q5 (most non-white)"],
+               ["whitest", "2", "3", "4", "most\nnon-white"], "block-group non-white-share quintile"))
+    for ax, stratum, levels, ticks, xlabel in panels:
+        for s_lab, s_key, s_name in EQ_SURFACES:
+            y = [_eq_cell(st, s_lab, "ends", stratum, lv, "homes_pct") for lv in levels]
+            lw = 2.2 if s_key == "Sfive" else 1.3
+            ax.plot(range(5), y, marker="o", ms=3.5, lw=lw, color=colours[s_key], label=s_name)
+        ax.axhline(0, color=PPI_COLORS["dark"], lw=0.6)
+        ax.set_xticks(range(5))
+        ax.set_xticklabels(ticks, fontsize=8)
+        ax.set_xlabel(xlabel)
+    axes[0].set_ylabel("change in homes' total bill (%)")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, fontsize=8, frameon=False, loc="lower center", ncol=len(EQ_SURFACES),
+               bbox_to_anchor=(0.5, -0.06))
+    fig.tight_layout()
+    fig.savefig(FIGS / "equity_profile.pdf")
+    plt.close(fig)
+
+
+# --------------------------------------------------------------------------- #
 # Figures
 # --------------------------------------------------------------------------- #
 def fig_scenario_compare(b):
@@ -901,18 +1111,20 @@ def fig_default_ratio(r_opa, r_lycd):
 def main():
     df, rat, met = load()
     H = Headlines(prefix=PREFIX, out_path=TABLES / "headlines.tex")
-    s2 = load_s2()
-    H.add("HasStwo", "yes" if s2 is not None else "no")
-    if s2 is not None:
-        cols = s2["export"][["parcel_id", "lycd_land_value", "alloc_land"]].rename(
-            columns={"lycd_land_value": "s2_land", "alloc_land": "s2_alloc_land"})
+    sales = load_sales()
+    if sales is not None:
+        cols = sales["export"][["parcel_id", "lycd_land_value", "alloc_land"]].rename(
+            columns={"lycd_land_value": "sales_land", "alloc_land": "sales_alloc_land"})
         df = df.merge(cols, on="parcel_id", how="left")
+    eq = load_equity()
 
     b, moved = scenario_c(df, H)
     scenario_a(df, H)
     d = uniformity_tests(df, H)
-    if s2 is not None:
-        s2_section(df, s2, H)
+    if sales is not None:
+        sales_section(df, sales, H)
+    if eq is not None:
+        equity_section(eq, H)
     r_opa, r_lycd = default_ratio_collapse(df, H)
     sales_test(rat, H)
 

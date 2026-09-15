@@ -31,6 +31,7 @@ Outputs (analysis/data/, gitignored):
     philadelphia_equity_by_surface_summary.csv  first vs last quintile per scenario
     philadelphia_equity_by_surface_bg_corr.csv  block-group correlations of the % change
     philadelphia_equity_by_surface_knn.csv      homes % change with and without KNN-filled parcels
+    philadelphia_equity_by_surface_edges.csv    the quintile boundaries every stratum uses
 
 Limits: neighbourhood-level, not household-level; parcel owners are not necessarily residents,
 and nothing here models incidence on renters.
@@ -157,6 +158,8 @@ def build_strata(base: pd.DataFrame, homes: np.ndarray) -> pd.DataFrame:
                              labels=["<10% Black", "10-50%", "50-80%", ">80% Black"])
     print(f"Income quintile edges: {[int(x) for x in inc_edges]}")
     print(f"Non-white share quintile edges: {[round(float(x), 1) for x in min_edges]}")
+    pd.DataFrame({"quantile": [0, .2, .4, .6, .8, 1], "median_income": inc_edges,
+                  "nonwhite_pct": min_edges}).to_csv(DATA / "philadelphia_equity_by_surface_edges.csv", index=False)
     return g
 
 
@@ -273,7 +276,7 @@ def main() -> None:
     print(summary.round(1).to_string(index=False))
     print("\nHomes % change with and without KNN-filled parcels")
     print(knn.round(1).to_string(index=False))
-    print(f"\nWrote four CSVs to {DATA}")
+    print(f"\nWrote five CSVs to {DATA}")
 
 
 if __name__ == "__main__":
