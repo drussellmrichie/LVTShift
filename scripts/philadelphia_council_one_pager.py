@@ -149,6 +149,36 @@ def solve_split_rate(land: np.ndarray, building: np.ndarray, revenue: float, rat
     return ratio * building_mills, building_mills
 
 
+def uncap_bare_land(alloc, post: pd.DataFrame, taxable: np.ndarray):
+    """Take the sales-based land value whole on parcels that carry no building.
+
+    `reallocate_land_within_total` caps land at the parcel's own total, which for a bare lot IS
+    its land: the re-split can then never assess such a lot above what OPA already says, and where
+    the sales estimate is LOWER it books the shortfall as `alloc_building` -- a building line on a
+    lot with no building. Under the flat rate that function models this is harmless (the two lines
+    sum to the same total, so the bill is identical, which is the sense in which its docstring says
+    vacant parcels never move). Stacking a split rate on top is what makes it bite: measured on
+    TY2026, 14,831 of 30,564 taxable vacant lots would have a phantom $0.82B taxed at the building
+    rate, and the other half would have their under-assessment frozen in place.
+
+    So the cap is lifted exactly where there is no improvement to hold a total fixed against. For a
+    bare lot "hold the total fixed" and "value the land at what it sells for" are the same
+    instruction, and a total that disagrees with the sales evidence is an assessment error, not a
+    constraint. Nothing with a building on it is touched, and no building is ever revalued.
+
+    The parcel's own exemption is carried in dollars (144 bare parcels have one, nearly all partial
+    institutional relief, which is relief against total value and so does not follow the split).
+    """
+    land = alloc.alloc_taxable_land.to_numpy().copy()
+    building = alloc.alloc_taxable_building.to_numpy().copy()
+    gross_total = (post.taxable_land + post.exempt_land + post.taxable_building + post.exempt_building).to_numpy()
+    bare = taxable & ((post.taxable_building + post.exempt_building).to_numpy() <= 1.0)
+    exempt_dollars = (gross_total - alloc.reconstructed_taxable_total.to_numpy()).clip(min=0)
+    land[bare] = (post.s5_land.to_numpy()[bare] - exempt_dollars[bare]).clip(min=0)
+    building[bare] = 0.0
+    return land, building, bare
+
+
 def strata(g: pd.DataFrame, homes: np.ndarray) -> pd.DataFrame:
     """Block-group quintiles of income and non-white share, cut over taxable homes."""
     inc = g.median_income.where(g.median_income > 0)
@@ -272,16 +302,17 @@ def main() -> None:
     r = reallocate_land_within_total(post, new_land_col="s5_land", homestead_cap=params.homestead_exemption)
     print(r.describe())
 
-    land = r.alloc_taxable_land.to_numpy()
-    building = r.alloc_taxable_building.to_numpy()
     base_total = r.reconstructed_taxable_total.to_numpy()   # the same rule on OPA's own land
+    taxable = ~full_exempt
+    land, building, bare = uncap_bare_land(r, post, taxable)
 
-    # Holding the total fixed means the reform cannot change what a parcel is taxed ON once the
-    # abatement is gone -- only how that value is split. Anything else is an exemption whose size
-    # depends on the split, and post-abatement that is only the unidentified value-tracking relief.
+    # A parcel with a building on it keeps its total: the reform can only change how that total is
+    # split, so the only such bills that move are the ones whose relief depends on the split.
+    built = taxable & ~bare
     identical = np.isclose(land + building, base_total, atol=1.0)
-    print(f"taxable total unchanged by the re-split on {identical.mean():.3%} of parcels "
-          f"({(~identical).sum():,} move, ${np.abs(land + building - base_total).sum()/1e6:,.0f}M)")
+    print(f"{bare.sum():,} bare lots revalued from sales; no building reassessed. "
+          f"Taxable total unchanged on {identical[built].mean():.2%} of the {built.sum():,} taxable "
+          f"parcels that have a building ({(~identical & built).sum():,} move, split-dependent relief)")
 
     current = base_total * millage / 1000
     revenue = float(current.sum())
@@ -289,7 +320,6 @@ def main() -> None:
     new = (land * land_mills + building * building_mills) / 1000
     assert abs(new.sum() / revenue - 1) < 1e-9, "split-rate solve is not revenue-neutral"
 
-    taxable = ~full_exempt
     homes = category.isin(HOMES).to_numpy() & taxable
     groups = category.map(property_group)
     q, edges = strata(g, homes)
@@ -324,9 +354,12 @@ def main() -> None:
         as_of=pd.Timestamp.today().strftime("%Y-%m-%d"),
         source="LVTShift scripts/philadelphia_council_one_pager.py",
         model=dict(tax_year=TAX_YEAR, ratio=RATIO, land_surface="S5 paired sales",
-                   construction="OPA total held fixed; land = min(S5 land, total); building = total - land",
+                   construction=("OPA total held fixed where there is a building: land = min(S5, total), "
+                                 "building = total - land. On bare lots the cap is lifted and land = S5."),
                    horizon="after today's 10-year abatements have expired",
-                   taxable_total_unchanged_pct=float(100 * identical.mean())),
+                   bare_lots_revalued=int(bare.sum()),
+                   built_parcels=int(built.sum()),
+                   built_total_unchanged_pct=float(100 * identical[built].mean())),
         rates=dict(current_rate_pct=float(millage / 10), land_rate_pct=float(land_mills / 10),
                    building_rate_pct=float(building_mills / 10),
                    building_rate_cut_pct=float(100 * (building_mills / millage - 1)),
