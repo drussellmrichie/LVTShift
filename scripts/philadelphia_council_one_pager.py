@@ -256,6 +256,47 @@ def payback() -> dict:
     )
 
 
+def worked_example(g, category, full_exempt, land, building, current, millage, land_mills, building_mills) -> dict:
+    """A rowhouse and the empty lot beside it, at typical Philadelphia values.
+
+    The pair is the MEDIAN LAND and MEDIAN BUILDING of taxable single-family homes, not the
+    parcel at the median bill. Those are different houses and the difference is not cosmetic: the
+    median-bill rowhouse carries $154k of building over $20k of land, an 11% land share, so it
+    saves $943 -- five times the median saving the page reports. Printing that beside "the median
+    home saves $206" would be arithmetically correct and deeply misleading.
+
+    The empty lot is given the same land value as the house, which is the point of the comparison:
+    identical ground, one built on and one not. Its bill is land alone.
+
+    Unlike a full shift, a 4:1 split does not make the two bills equal, and the pair does not
+    balance to zero between themselves -- revenue neutrality holds citywide, not within any two
+    parcels. Do not reword the caption to imply otherwise.
+    """
+    sfr = (category == "Single Family Residential").to_numpy() & ~full_exempt & (current > 0)
+    house_land = float(np.median(land[sfr]))
+    house_building = float(np.median(building[sfr]))
+
+    def bill(l, b, rate_l, rate_b):
+        return (l * rate_l + b * rate_b) / 1000
+
+    change = (new_tax := bill(house_land, house_building, land_mills, building_mills)) - (
+        today := bill(house_land + house_building, 0.0, millage, 0.0))
+    lot_today = bill(house_land, 0.0, millage, 0.0)
+    lot_new = bill(house_land, 0.0, land_mills, 0.0)
+    # A parcel pays less exactly when its land share sits below the citywide taxable land share.
+    pivot = float(100 * land.sum() / (land.sum() + building.sum()))
+    return dict(
+        basis="median land and median building value of taxable single-family homes",
+        house_land_usd=house_land, house_building_usd=house_building,
+        house_land_share_pct=float(100 * house_land / (house_land + house_building)),
+        house_today_usd=float(today), house_new_usd=float(new_tax), house_change_usd=float(change),
+        lot_today_usd=float(lot_today), lot_new_usd=float(lot_new),
+        lot_change_usd=float(lot_new - lot_today),
+        median_sfr_change_usd=float(np.median(((land * land_mills + building * building_mills) / 1000 - current)[sfr])),
+        pays_less_below_land_share_pct=pivot,
+    )
+
+
 def render_map() -> None:
     import geopandas as gpd
     import matplotlib
@@ -368,6 +409,7 @@ def main() -> None:
         all_taxable=bill_stats(current, new, taxable),
         by_property_group=by_group.round(2).to_dict("index"),
         homes_profile=profile,
+        worked_example=worked_example(g, category, full_exempt, land, building, current, millage, land_mills, building_mills),
         ratio_sweep=sweep,
         quintile_edges=edges,
         transition=payback(),
