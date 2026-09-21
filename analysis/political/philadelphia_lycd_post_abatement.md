@@ -201,7 +201,7 @@ Philadelphia's political and economic conditions are unusually favorable for LVT
 
 ### Peer city signal
 
-Pennsylvania has a real split-rate tradition, but it is a **dormant** one, not an active trend: Scranton (1913), Harrisburg (1975), Washington PA (1985), McKeesport (1980), and Allentown (1997) all currently or historically operate split-rate; Pittsburgh ran one from 1913–2001 before repealing it (a cautionary precedent — repeal is politically possible even after 90 years). No 2024–2026 news of expansion, adoption, or repeal was found for any of these — Philadelphia would be *reviving* a largely static PA tradition, not joining current momentum, which is a materially different (weaker) social-proof argument than the brief would want if there were live peer-city energy to point to.
+Pennsylvania has a real split-rate tradition, but it is a **contracting** one, not an active trend. Harrisburg (since 1975) and Allentown (since 1997) still levy one. Washington PA (1985) and McKeesport (1980) had no recorded end in data through 2018. In all, fewer than a dozen of the Commonwealth's 2,560 municipalities split their rate. The two oldest precedents have both ended: Pittsburgh ran one from 1913 to 2001, and Scranton, split-rate since 1913, moved to a single rate for 2026 as Lackawanna County's reassessment took effect (City of Scranton 2026 budget, p. 7: most vacant land had been built on, and a single rate is simpler). This is a cautionary precedent: repeal is politically possible even after a century, and Scranton's came with a reassessment. No 2024–2026 expansion or new adoption was found, so Philadelphia would be *reviving* a contracting PA tradition, not joining current momentum, which is a materially different (weaker) social-proof argument than the brief would want if there were live peer-city energy to point to.
 
 ### Recent referenda
 
@@ -283,7 +283,7 @@ Because the legal pathway is bifurcated (state enabling legislation first, then 
 - "Every single Council district in Philadelphia — all 10 — has a majority of homeowners paying less under this reform, with a citywide median cut of 23% for single-family homes."
 - "Vacant land in Philadelphia would see its tax bill rise nearly six-fold on a median basis, while 76.6% of homeowners see a cut — the reform shifts the burden from people living in their homes to land being held idle."
 - "The lowest-income neighborhoods in Philadelphia see the *largest* median tax cuts of any income group under this model, not the smallest."
-- "This isn't hypothetical for Pennsylvania — Scranton, Harrisburg, Allentown, and other PA cities have run split-rate taxes for decades; Philadelphia would be reviving a Pennsylvania tradition, not importing an untested idea, though no PA city has moved on this in the current legislative session, so the coalition would need to build fresh momentum rather than ride an existing wave."
+- "This isn't hypothetical for Pennsylvania — Harrisburg and Allentown have taxed land above buildings for decades, and Scranton did from 1913 until it moved to a single rate in 2026; Philadelphia would be reviving a Pennsylvania tradition, not importing an untested idea, though no PA city has moved on this in the current legislative session, so the coalition would need to build fresh momentum rather than ride an existing wave."
 
 ---
 
