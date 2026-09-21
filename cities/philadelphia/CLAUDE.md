@@ -176,7 +176,21 @@ so never match on `R*` alone; and `DD0`/`DE0` are office buildings whose descrip
 mention parking. `building_code` is **not** in the parcel cache — `analysis/ownership/philadelphia/fetch_opa_attributes.py`
 pulls it as a sidecar. See `analysis/ownership/philadelphia/` for the ownership-by-type
 analysis built on it, and note the City's Land Use layer is *not* a usable parking source
-(it identifies ~200 parking parcels citywide against the assessor's ~2,200).
+(it identifies ~200 parking parcels citywide against the assessor's ~2,200). The codes live
+once, as `lvt.philadelphia.SURFACE_PARKING_CODES`, `SURFACE_PARKING_WITH_STRUCTURE_RE` and
+`PARKING_GARAGE_RE`; the ownership analysis imports them.
+
+**Commercial building types come from OPA's description, not its code.** The codes run two
+schemes (commercial `LC0` warehouse, residential-style `O30` rowhouse), so
+`lvt.philadelphia.commercial_building_type` groups `building_code_description` by ordered
+prefix rules (`COMMERCIAL_BUILDING_TYPES`, first match wins), taking only parking from the
+code. `zoning_family` groups OPA's zoning, which OPA writes without hyphens (`CMX5`, `CA1`).
+The one-pager's `commercial_breakdown` uses both and asserts that the rules place all but a
+few percent of the sector's tax. It reports each group's median land share beside its bill
+change, because under a total-held-fixed split rate that share is the whole mechanism:
+building-heavy towers and hotels pay less, land-heavy warehouses, strip centres and gas
+stations pay more. S5 prices expensive land and large lots least reliably, so those are the
+groups whose magnitudes deserve the most suspicion.
 
 **OPA owner names truncate at two widths, 25 and 40 characters** — the length histogram
 spikes at both. Truncation cuts the legal suffix off (`S&S REALITY INVESTMENTS L`), so any

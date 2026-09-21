@@ -44,7 +44,9 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(HERE))
 
 import owner_lib as ol  # noqa: E402
-from lvt.philadelphia import parcel_cache_path  # noqa: E402
+from lvt.philadelphia import (  # noqa: E402
+    PARKING_GARAGE_RE, SURFACE_PARKING_CODES, SURFACE_PARKING_WITH_STRUCTURE_RE, parcel_cache_path,
+)
 
 RESULTS = HERE / 'results'
 FIGS = HERE / 'figs'
@@ -60,13 +62,15 @@ PARKING_CATEGORIES = (PARK_COMMERCIAL, PARK_NONCOMMERCIAL, PARK_STRUCTURE, PARK_
 VACANT_CATEGORY = 'Vacant Land'
 HEADLINE_CATEGORIES = (VACANT_CATEGORY, *PARKING_CATEGORIES)
 
+# The parking codes themselves are lvt.philadelphia's, the repo's one definition of parking.
 _PARKING_EXACT = {'RA': PARK_NONCOMMERCIAL, 'RB': PARK_COMMERCIAL, 'RE': PARK_COMMERCIAL}
-_PARKING_STRUCTURED_RE = re.compile(r'^R[A-F]\d$')   # RC0, RD6, RE6, RF0, …
+assert set(_PARKING_EXACT) == SURFACE_PARKING_CODES, "surface-parking codes drifted from lvt.philadelphia"
+_PARKING_STRUCTURED_RE = SURFACE_PARKING_WITH_STRUCTURE_RE   # RC0, RD6, RE6, RF0, …
 # Commercial parking garages ('GAR W/COMM AREA' / 'GAR NO COMM AREA'). Kept separate from the
 # surface lots because a garage is a building — a land value tax treats the two very
 # differently, and conflating them would blunt the headline. 'V*' (PRIV GAR) is excluded:
 # those are detached residential garages, not commercial parking.
-_GARAGE_RE = re.compile(r'^O[AB]\d$')
+_GARAGE_RE = PARKING_GARAGE_RE
 # How many top mailing addresses the brief's mail-drop concentration test reports.
 OOS_TOP_N = 10
 # 'R30' etc. are ROW B/GAR rowhouses, not parking — only warn about genuinely parking-named
