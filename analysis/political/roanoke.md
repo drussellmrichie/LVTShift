@@ -144,7 +144,7 @@ LVT extends this exact logic from a penalty on the worst properties to a structu
 
 No Virginia city has enacted split-rate yet, despite the 2002–2026 statutory authority. The 2026 HB 282 expansion (adding four more cities) represents the strongest legislative signal yet that the General Assembly considers this viable. Roanoke could be the first mover in Virginia — a significant political opportunity ("Roanoke leads the state on housing innovation") but also a risk (no local precedent to point to).
 
-Pennsylvania provides the strongest nearby peer signal: Harrisburg, Allentown, Scranton, and ~15 other PA cities operate under split-rate taxation. These precedents can be cited, though Virginia officials typically want Virginia precedents.
+Pennsylvania provides the strongest nearby peer signal: fewer than a dozen PA municipalities levy split-rate taxes, the largest being Allentown and Harrisburg. Scranton, split-rate since 1913, moved to a single rate in 2026. These precedents can be cited, though Virginia officials typically want Virginia precedents.
 
 ### Recent Referenda
 
