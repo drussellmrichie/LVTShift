@@ -231,21 +231,22 @@ For each city, walk this checklist in order. The first "no" or "blocked" answer 
 23. Is there acquisition-value or other assessment-locking mechanism?
 24. Are there circuit breaker credits that effectively refund tax above some threshold? Do they apply to voted levies?
 25. What levy lid lift or excess levy mechanisms exist?
+26. Does a homestead or other fixed-amount exclusion interact with the split rate? Check whether the statute fixes which component it comes off (Pennsylvania: improvements first, 53 Pa.C.S. §8583(c)) and whether any rule bars raising millage to fund exclusions (Pennsylvania: Art. VIII §2(b)(vi) and §8586). Both constrain the revenue-neutral solve, and the first decides whether owner-occupants gain.
 
 ### F. Assessment foundation (Layer 5)
 
-26. Are land and improvement values assessed separately and publicly available?
-27. What is the reassessment cycle, and when was the last reassessment?
-28. Are there use-value or current-use special assessment regimes that would distort LVT economics?
-29. Is the assessment ratio 100% of market value, or some other percentage?
-30. Are condo, mobile home, or other property types assessed in unusual ways that need correction (cf. St. Paul condo collapse)?
+27. Are land and improvement values assessed separately and publicly available?
+28. What is the reassessment cycle, and when was the last reassessment?
+29. Are there use-value or current-use special assessment regimes that would distort LVT economics?
+30. Is the assessment ratio 100% of market value, or some other percentage?
+31. Are condo, mobile home, or other property types assessed in unusual ways that need correction (cf. St. Paul condo collapse)?
 
 ### G. Political and procedural feasibility (Layer 6)
 
-31. What state-level votes (legislative, referendum) and local-level votes are required for each vehicle?
-32. Is there a pilot or sunset structure available?
-33. What is the historical record of LVT or classification reform in this state?
-34. Who are the named statutory advocates and opponents, if any?
+32. What state-level votes (legislative, referendum) and local-level votes are required for each vehicle?
+33. Is there a pilot or sunset structure available?
+34. What is the historical record of LVT or classification reform in this state?
+35. Who are the named statutory advocates and opponents, if any?
 
 ---
 
@@ -336,6 +337,9 @@ Philadelphia is the guide's cautionary example: the *textual* uniformity clause 
 
 - **Local authority.** Home rule charter, but home rule does not reach tax structure — the General Assembly has reserved that to itself.
 - **Caps.** No constitutional aggregate rate cap analogous to WA or CA. Vehicle E is therefore irrelevant here: there is no cap to escape.
+- **The Homestead Exemption binds any split rate, in two ways.** Texts verified at the General Assembly's site on 2026-09-21.
+  - *Which line it comes off.* 53 Pa.C.S. §8583(c): "In political subdivisions where different millage rates are applied to land and the improvements upon land, the exclusion … shall be applied first to the value of the improvements, and the remainder of the exclusion, if any, shall be applied to the value of the land." At one rate the order is invisible. Under a split rate it makes the exclusion worth `cap × building rate`, well under half its single-rate value at 4:1, so a shift that cuts rentals' bills raises most owner-occupants'. OPA already records the exclusion building-first. Any other allocation needs §8583(c) amended, which the Tier 4 enabling bill can carry. The constitution does not require building-first: Art. VIII §2(b)(vi) authorizes excluding "an amount based on the assessed value of homestead property", up to 100% of each homestead's assessed value, and says nothing about land versus improvements. §8583(a) likewise speaks of "a fixed dollar amount of the assessed value". §8586 caps the exclusion at one-half of the median assessed value of homestead property. Whether anything Philadelphia-specific displaces §8583(c) has not been checked against Phila. Code §19-1301.1 (unavailable 2026-09-21); the City's Real Estate Tax regulations adopt the state act's definitions and cap. Modelling: `homestead_order` in `lvt/philadelphia.py`; comparison under `homestead_comparison` in `scripts/philadelphia_council_one_pager.py`'s output.
+  - *The millage ban.* Art. VIII §2(b)(vi): "A local taxing authority may not increase the millage rate of its tax on real property to pay for these exclusions." §8586 repeats it for exclusions under §§8583 and 8585. A revenue-neutral split rate sets new millages whose level depends on how much of the base the exclusion removes, and any allocation that makes the exclusion worth more than building-first does needs higher rates to raise the same levy. Whether that is increasing the millage "to pay for these exclusions" is unadjudicated; no case applying the sentence to a split-rate reset was found. For: the excluded assessed value is identical under every allocation, and every millage is reset for a new two-rate structure, with the building rate cut sharply. Against: the comparison a challenger would draw is building-first, the only allocation current law allows under two rates. Exposure rises with the exclusion's cost: an allocation that makes it cost more revenue than it does today (land-first) is the most exposed, one that costs less than today (proportional to value) less so. The enabling bill should say how the exclusion applies under two rates and that revenue-neutral millages set for the shift are not an increase to pay for it. Add the question to the Solicitor opinion.
 - **Assessment.** OPA publishes separate land and improvement values, but the split is weak — roughly 80% of parcels carry a default 20% land ratio. See [cities/philadelphia/CLAUDE.md](../cities/philadelphia/CLAUDE.md) before relying on it.
 - **Open vehicles.** A and C are the live candidates, both requiring state action. B (universal building exemption) is theoretically available but runs into the same missing statutory authority. D is available today but is not LVT.
 - **Recommended pathway.** Tier 4 — Philadelphia-specific enabling legislation (Sterling Act amendment or a First Class City LVT authorization), or Tier 5 as part of a statewide bill if a broader coalition exists. A formal City Solicitor opinion on the constitutional question is the sensible first step, since it prices the litigation risk before the legislative effort begins.

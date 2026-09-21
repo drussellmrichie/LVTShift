@@ -298,6 +298,20 @@ quote from there, not from here.**
   touch. Export columns: `alloc_*`, `exemption_kind`, `norollback_new_tax`, `abated`,
   `market_value`, `taxable_total`, `dor_area_sqft`, `lycd_zone_psf`, `gma3` — the last five
   exist so the report generator can run the ordinance's uniformity tests without the cache.
+- **Under a split rate, the Homestead Exemption's line decides who among homeowners gains.** At
+  one rate it is worth `cap × rate` whatever line it comes off. Stack a split rate on either
+  reform above and the statutory order, building first (53 Pa.C.S. § 8583(c), which OPA's
+  TY2026 records follow on every homestead-only parcel), makes it worth `cap × building rate`,
+  well under half today's value at 4:1. That one line is why a shift that cuts rentals' bills
+  can raise most owner-occupants'. `homestead_order` on `reallocate_land_within_total` and
+  `carry_forward_exemptions` (`building_first` default, `land_first`, `value_share`,
+  `tax_share` + `homestead_rate_ratio`) changes only the split between the two taxable lines:
+  taxable totals, `reform_change` and the guard are identical under every order, so the order
+  is invisible until someone applies two rates. Every order but the default needs § 8583(c)
+  amended. `value_share` is the neutral one: the exclusion then cuts a parcel's bill by
+  `cap / value` at any pair of rates, so a homestead home and its unexempted twin change by the
+  same percentage. `scripts/philadelphia_council_one_pager.py --homestead-order` picks the
+  headline order, and its `homestead_comparison` reports all four.
 - **`paint_land_surface`** (notebook Step 2b, `LVT_LAND_SURFACE=<column>`) swaps an externally
   estimated land **rate** onto this repo's parcels, from
   `philly_open_avmkit`'s `out/land/land_surfaces_ty<YEAR>.csv` (keyed `parcel_number`; `s2_k20`
