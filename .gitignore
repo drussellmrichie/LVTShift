@@ -198,11 +198,14 @@ cities/seattle/model.ipynb
 # Claude Code agent worktrees (transient agent state, never commit)
 .claude/worktrees/
 
-# Legality-analyzer briefs (kept local-only)
+# Legality-analyzer briefs: local by default. Briefs meant to be public are committed
+# deliberately with `git add -f`; once tracked, edits to them are tracked like any file.
 analysis/legal/
 
 # Model methodology explainers (kept local-only)
 analysis/explainers/
 
-# Political viability briefs (kept local-only)
+# Political viability briefs: local by default, as for analysis/legal/. The published
+# briefs are committed with `git add -f`; drafts, deck build files and generated numbers
+# stay local.
 analysis/political/
