@@ -55,6 +55,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from lvt.philadelphia import (  # noqa: E402
     COMMERCIAL_OTHER, HOMESTEAD_ORDERS, _decompose_exemptions, commercial_building_type, expand_abatement_cohort,
     parcel_cache_path, reallocate_land_within_total, split_zero_building_parcels, tax_year_params, uncap_bare_land,
+    LARGE_TRACT_TREATMENTS,
     zoning_family,
 )
 
@@ -64,6 +65,7 @@ DATA = REPO_ROOT / "analysis/data"
 CACHE_DIR = REPO_ROOT / "cities/philadelphia/data"
 OUT = REPO_ROOT / "analysis/political/philadelphia_council_one_pager"
 SURFACE_EXPORT = DATA / f"philadelphia_lycd_reassessment_ty{TAX_YEAR}_s5.csv"
+SURFACE_SUPPORT = DATA / f"philadelphia_lycd_reassessment_ty{TAX_YEAR}_s5_support.json"   # written with the export
 GATHERED_JSON = REPO_ROOT / "analysis/reports/philadelphia/vacant_parking_gathered.json"
 OPA_ATTRIBUTES = REPO_ROOT / "analysis/ownership/philadelphia/opa_attributes.parquet"   # fetch_opa_attributes.py
 COUNCIL_DISTRICTS = CACHE_DIR / "council_districts.gpq"     # cached by scripts/map_philadelphia_tax_changes.py
@@ -120,7 +122,11 @@ def load_parcels() -> pd.DataFrame:
     g["parcel_id"] = g.parcel_number.astype(str).str.lstrip("0").astype("Int64")
 
     s = pd.read_csv(SURFACE_EXPORT, usecols=["parcel_id", "lycd_land_value", "land_surface_source",
+                                             "land_beyond_support", "land_surface_psf", "dor_area_sqft",
                                              "std_geoid", "median_income", "minority_pct", "black_pct"], **READ)
+    s["land_beyond_support"] = s.land_beyond_support.astype(str).str.lower().eq("true")
+    # What the surface would say if taken whole, kept only so the range can report it.
+    s["s5_land_uncarried"] = (s.pop("land_surface_psf") * s.pop("dor_area_sqft")).clip(lower=0)
     # A handful of parcel_ids name more than one physical parcel with genuinely different
     # attributes (cities/philadelphia/CLAUDE.md). The cache and the export cannot be joined by row
     # order either, so those ids are dropped from both sides rather than matched arbitrarily.
@@ -201,13 +207,23 @@ def bill_stats(cur: np.ndarray, new: np.ndarray, mask: np.ndarray) -> dict:
                 median_change_usd=float(np.median(n - c)), median_current_bill_usd=float(np.median(c)))
 
 
+def surface_support() -> dict:
+    """The surface's own statement of where its sales stop testing it (philly_open_avmkit's
+    `land_surface_support.json`, written beside the export by the reassessment notebook)."""
+    return json.loads(SURFACE_SUPPORT.read_text(encoding="utf-8"))
+
+
 def shift(post: pd.DataFrame, taxable: np.ndarray, params, homestead_order: str, ratio: float = RATIO,
-          land_col: str = "s5_land"):
+          land_col: str = "s5_land", large_tracts: str = "carry_opa"):
     """The reform at one homestead order and one rate ratio: taxable lines, today's bill, the new bill."""
     r = reallocate_land_within_total(post, new_land_col=land_col, homestead_cap=params.homestead_exemption,
                                      homestead_order=homestead_order, homestead_rate_ratio=ratio)
     base_total = r.reconstructed_taxable_total.to_numpy()   # the same rule on OPA's own land
-    land, building, bare = uncap_bare_land(r, post, taxable, land_col)
+    # A bare lot larger than the land sales can test keeps OPA's value (`uncap_bare_land`).
+    land, building, bare = uncap_bare_land(
+        r, post, taxable, land_col, beyond_support=post.land_beyond_support.to_numpy(),
+        large_tracts=large_tracts, uncarried_land=post.s5_land_uncarried.to_numpy(),
+        opa_level=surface_support()["reference_median_ratio_beyond_edge_still_vacant"])
     current = base_total * params.combined_mills / 1000
     revenue = float(current.sum())
     land_mills, building_mills = solve_split_rate(land, building, revenue, ratio)
@@ -754,12 +770,31 @@ def main() -> None:
                                                 / current[(groups == "vacant land").to_numpy()].sum() - 1)))
         sweep[f"{ratio:g}:1"] = s
 
+    # Bare lots larger than the land sales can test: the headline carries them at OPA's value,
+    # and the two other readings are solved whole so the sector figures can be printed as a range.
+    beyond = bare & post.land_beyond_support.to_numpy()
+    large_tract_range = {}
+    for treatment in LARGE_TRACT_TREATMENTS:
+        alt = headline if treatment == "carry_opa" else shift(post, taxable, params, order, large_tracts=treatment)
+        t = sector_totals(groups, taxable, alt.current, alt.new)
+        large_tract_range[treatment] = dict(
+            bare_land_beyond_support_busd=float(alt.land[beyond].sum() / 1e9),
+            land_rate_pct=float(alt.land_mills / 10), building_rate_pct=float(alt.building_mills / 10),
+            by_property_group=t[["change_pct", "change_musd"]].round(2).to_dict("index"))
+    support = surface_support()
+
     numbers = dict(
         as_of=pd.Timestamp.today().strftime("%Y-%m-%d"),
         source="LVTShift scripts/philadelphia_council_one_pager.py",
         model=dict(tax_year=TAX_YEAR, ratio=RATIO, land_surface="S5 paired sales",
                    construction=("OPA total held fixed where there is a building: land = min(S5, total), "
-                                 "building = total - land. On bare lots the cap is lifted and land = S5."),
+                                 "building = total - land. On bare lots the cap is lifted and land = S5, "
+                                 "up to the lot size the land sales can test; a larger bare lot keeps "
+                                 "OPA's value."),
+                   support_edge_sqft=float(support["edge_sqft"]),
+                   bare_lots_beyond_support=int(beyond.sum()),
+                   opa_median_ratio_on_large_vacant_sales=float(
+                       support["reference_median_ratio_beyond_edge_still_vacant"]),
                    horizon="after today's 10-year abatements have expired",
                    homestead_order=order, homestead_rule=HOMESTEAD_LABELS[order],
                    bare_lots_revalued=int(bare.sum()),
@@ -775,6 +810,7 @@ def main() -> None:
         homes_profile=profile,
         worked_example=worked_example(g, category, full_exempt, land, building, current, millage, land_mills, building_mills),
         ratio_sweep=sweep,
+        large_tract_range=large_tract_range,
         quintile_edges=edges,
         transition=payback(order, headline),
         vacant_and_parking=json.loads(GATHERED_JSON.read_text()),
@@ -790,7 +826,8 @@ def main() -> None:
     (OUT / "numbers.json").write_text(json.dumps(numbers, indent=2), encoding="utf-8")
     render_map()
     print(json.dumps({k: numbers[k] for k in
-                      ("rates", "homes", "by_property_group", "homes_profile", "transition")}, indent=2))
+                      ("rates", "homes", "by_property_group", "large_tract_range", "homes_profile",
+                       "transition")}, indent=2))
     print_homestead_comparison(numbers["homestead_comparison"])
     print_commercial_breakdown(numbers["commercial_breakdown"])
     print_new_sections(numbers)

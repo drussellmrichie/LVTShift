@@ -191,7 +191,8 @@ def load_inputs(ty, settings: dict = DEFAULT_SETTINGS) -> pd.DataFrame:
         gdf[c] = pd.to_numeric(gdf[c], errors="coerce").fillna(0.0)
 
     s5 = pd.read_csv(S5_EXPORT, usecols=["parcel_id", "land_surface", "lycd_land_value", "alloc_land",
-                                         "alloc_building", "alloc_taxable_total", "current_tax"],
+                                         "alloc_building", "alloc_taxable_total", "current_tax",
+                                         "land_beyond_support"],
                      encoding="utf-8", encoding_errors="replace")
     s5["parcel_number"] = _pid(s5.pop("parcel_id"))
     assert (s5["land_surface"] == "s5").all(), f"{S5_EXPORT.name} was not built on the S5 surface"
@@ -217,7 +218,10 @@ def load_inputs(ty, settings: dict = DEFAULT_SETTINGS) -> pd.DataFrame:
     if settings["revalue_bare_lots"]:
         # The one-pager's rule, from the same library function, applied to the same frame.
         pays = ~((df["taxable_land"] <= 0) & (df["taxable_building"] <= 0)).to_numpy()
-        land_u, _, bare = uncap_bare_land(alloc, df, pays)
+        # ...including where it stops: a bare lot larger than the land sales can test keeps
+        # OPA's value, or the one-pager's payback() would be reading a different reform.
+        beyond = s5["land_beyond_support"].astype(str).str.lower().eq("true").to_numpy()
+        land_u, _, bare = uncap_bare_land(alloc, df, pays, beyond_support=beyond)
         df["is_bare"] = bare
         df["bare_taxable_land"] = np.where(bare, land_u, 0.0)
 

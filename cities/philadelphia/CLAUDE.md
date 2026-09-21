@@ -349,6 +349,28 @@ quote from there, not from here.**
   before the cap (a § 3(c) finding about the totals, not about the surface). The export slug and
   `MODEL_TYPE` carry the surface name so runs never overwrite the LYCD export, and every
   downstream step (both readings, the assertions, the census join) is surface-agnostic.
+- **A painted rate is only evidence up to the lot size the land sales can test, and a vacant
+  lot is the one place nothing bounds it.** The sibling repo publishes that size beside the
+  surface (`land_surface_support.json`: the edge, the size elasticity, the painted-area and
+  beyond-support column names, and OPA's measured median ratio on still-vacant sales past
+  the edge). Passed as `paint_land_surface(support=...)` — the notebook does so whenever the
+  file exists — it changes three things. The KNN fill re-sizes each neighbour's rate to the
+  subject's OWN lot (`_knn_resized_rate_fill`) and draws only on in-support neighbours: a
+  neighbour's rate is a statement about a lot the neighbour's size, and handing it unchanged
+  to a parcel hundreds of times larger is how a rail yard came to be priced like a rowhouse
+  lot. Every parcel whose own or painted lot exceeds the edge is flagged
+  (`land_beyond_support` in the export). And a flagged parcel with a VACANT category code is
+  carried at `opa_gross_land`, `land_surface_source == 'opa_beyond_support'`. Improved
+  parcels are deliberately left alone: the cap at `market_value` already bounds them.
+  `uncap_bare_land` applies the same rule to its own, wider definition of bare (no building
+  value, whatever the category code) through its `beyond_support` argument, which the
+  one-pager AND the abatement phase-in both pass -- the phase-in must, or the one-pager's
+  `payback()` would be reading a different reform and refuse the run. `numbers.json`'s
+  `large_tract_range` solves the reform under all three readings of those lots — OPA's value
+  (the headline), OPA re-levelled by its measured ratio, and the extrapolated rate taken
+  whole — so the vacant-land and homes figures can be printed as a range. The notebook also
+  writes `<export>_support.json` beside the export so nothing downstream reaches into the
+  sibling repo.
 
 The report's § 3(b) section also carries four incentive tests from
 `philly_open_avmkit/notebooks/pipeline/land_tests.py`, read from that repo's

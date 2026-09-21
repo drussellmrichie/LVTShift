@@ -23,7 +23,8 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
-           "LandReallocation", "reallocate_land_within_total", "uncap_bare_land", "HOMESTEAD_ORDERS",
+           "LandReallocation", "reallocate_land_within_total", "uncap_bare_land", "LARGE_TRACT_TREATMENTS",
+           "HOMESTEAD_ORDERS",
            "LandSurfaceResult", "paint_land_surface",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES",
            "SURFACE_PARKING_CODES", "SURFACE_PARKING_WITH_STRUCTURE_RE", "PARKING_GARAGE_RE",
@@ -398,6 +399,41 @@ def _knn_median_fill(coords: "np.ndarray", values: "np.ndarray", k: int) -> "np.
     return filled
 
 
+def _knn_resized_rate_fill(coords, rates, painted_area, own_area, donor_ok, elasticity: float,
+                           k: int) -> "np.ndarray":
+    """Fill NaN `rates` from the `k` nearest donors, each donor's rate first re-sized from the
+    lot it was painted at to the SUBJECT's own lot: `r_j * (A_i / a_j) ** elasticity`.
+
+    A size-sensitive surface paints every parcel at its own lot size, so a neighbour's rate is
+    a statement about a lot the neighbour's size. Handing it unchanged to a subject two
+    hundred times larger prices a rail yard at a rowhouse lot's rate (audit 2026-09-21,
+    finding 3). The surface's adjustment is multiplicative in area, so re-sizing a donor's rate
+    is exact for the comparable grid that produced it. Donors are restricted to `donor_ok`
+    (parcels the surface's own evidence supports); a subject with no usable area of its own
+    takes the donors' median unre-sized, as `_knn_median_fill` would.
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    rates = np.asarray(rates, dtype=float)
+    a_don = np.asarray(painted_area, dtype=float)
+    a_own = np.asarray(own_area, dtype=float)
+    need = np.isnan(rates)
+    have = ~need & np.asarray(donor_ok, dtype=bool) & (a_don > 0)
+    if need.sum() == 0 or have.sum() == 0:
+        return rates
+    tree = cKDTree(coords[have])
+    _, ix = tree.query(coords[need], k=min(k, int(have.sum())), workers=-1)
+    if ix.ndim == 1:
+        ix = ix[:, None]
+    own = a_own[need]
+    own = np.where(np.isfinite(own) & (own > 0), own, np.nan)[:, None]
+    scale = np.where(np.isnan(own), 1.0, (own / a_don[have][ix]) ** elasticity)
+    filled = rates.copy()
+    filled[need] = np.median(rates[have][ix] * scale, axis=1)
+    return filled
+
+
 @dataclass(frozen=True)
 class LycdResult:
     """Output of `compute_lycd_land_values`: the frame with LYCD columns, plus diagnostics."""
@@ -695,7 +731,9 @@ class LandSurfaceResult:
     psf: "pd.Series"            # $/sqft actually used, after the KNN fill
     land_value: "pd.Series"     # psf x LVTShift's own lot area, improved parcels capped
     source: "pd.Series"         # 'surface' (joined) | 'knn' (filled from matched neighbours)
+                                #   | 'opa_beyond_support' (a vacant lot past the support edge)
     diagnostics: dict
+    beyond_support: "pd.Series | None" = None   # lot larger than the surface's sales can test
 
     def describe(self) -> str:
         d = self.diagnostics
@@ -707,6 +745,10 @@ class LandSurfaceResult:
             f"${d['land_base_pre_cap']/1e9:.2f}B -> ${d['land_base_post_cap']/1e9:.2f}B "
             f"({d['cap_removed_share']:.1%} removed) | "
             f"land > total on {d['n_land_exceeds_total']:,} improved parcels before the cap"
+            + ("" if not d.get("support_edge_sqft") else
+               f" | beyond the {d['support_edge_sqft']:,.0f} sqft support edge: {d['n_beyond_support']:,} parcels, "
+               f"{d['n_carried_at_opa']:,} vacant ones carried at OPA (${d['carried_value']/1e9:.2f}B, "
+               f"against ${d['surface_value_on_carried']/1e9:.2f}B painted)")
         )
 
 
@@ -721,6 +763,8 @@ def paint_land_surface(
     cap_improved_at_market: bool = True,
     vacant_codes=VACANT_CATEGORY_CODES,
     label: "str | None" = None,
+    support: "dict | None" = None,
+    carry_col: str = "opa_gross_land",
 ) -> LandSurfaceResult:
     """Paint an externally estimated land $/sqft surface onto LVTShift's parcel frame.
 
@@ -747,11 +791,25 @@ def paint_land_surface(
     assessment before the cap binds: under the draft ordinance's Sec. 3(c) that is not a
     permitted assessment, so it is a finding about the totals, and the report needs the count.
 
+    `support` is the surface's own statement of where its evidence ends: the parsed
+    `land_surface_support.json` that `run_land_surfaces.py` writes beside the surface
+    (`edge_sqft`, `size_elasticity`, and the names of the surface's painted-area and
+    beyond-support columns). With it, three things change, all of them about lots the sales
+    cannot speak to. (1) The KNN fill re-sizes each neighbour's rate to the subject's own lot
+    (`_knn_resized_rate_fill`) and draws only on neighbours inside the support edge. (2) Every
+    parcel whose own lot, or whose painted lot, exceeds the edge is flagged `beyond_support`.
+    (3) A flagged VACANT parcel whose OPA land value is its whole market value is carried at
+    `carry_col` (OPA's own gross land value) and marked `source == 'opa_beyond_support'`: an improved parcel's land is capped at its total,
+    so an extrapolated rate cannot add value to the base, but a vacant lot is taken whole and
+    nothing bounds it (audit 2026-09-21, finding 3). Without
+    `support` the function behaves exactly as before, for surfaces that publish no edge.
+
     Parameters
     ----------
     gdf : GeoDataFrame
         Needs `parcel_col`, `category_code`, `market_value`, `area_col` (run
-        `compute_lycd_land_values` first) and point geometry.
+        `compute_lycd_land_values` first) and point geometry; `carry_col` when `support` is
+        given.
     surface : DataFrame
         `parcel_col` (any zero-padding; normalised to 9 digits) and `rate_col` in $/sqft.
     rate_col : str
@@ -764,23 +822,45 @@ def paint_land_surface(
     out_index = gdf.index
     keys = gdf[parcel_col].astype(str).str.strip().str.zfill(9)
 
-    s = surface[[parcel_col, rate_col]].copy()
+    # Indexed strictly: a surface said to publish a support edge must carry its columns.
+    extra = [support["area_column"], support["flag_column"]] if support else []
+    s = surface[[parcel_col, rate_col, *extra]].copy()
     s[parcel_col] = s[parcel_col].astype(str).str.strip().str.zfill(9)
     s[rate_col] = pd.to_numeric(s[rate_col], errors="coerce")
-    s = s.dropna(subset=[rate_col]).drop_duplicates(parcel_col).set_index(parcel_col)[rate_col]
+    s = s.dropna(subset=[rate_col]).drop_duplicates(parcel_col).set_index(parcel_col)
 
-    psf = pd.Series(keys.map(s).to_numpy(dtype=float), index=out_index)
+    psf = pd.Series(keys.map(s[rate_col]).to_numpy(dtype=float), index=out_index)
     matched = psf.notna()
     coords = _parcel_coords(gdf)
-    psf_filled = pd.Series(_knn_median_fill(coords, psf.to_numpy(), knn_k), index=out_index)
+    area = pd.to_numeric(gdf[area_col], errors="coerce")
+    if support:
+        edge = float(support["edge_sqft"])
+        painted_area = pd.to_numeric(keys.map(s[support["area_column"]]), errors="coerce").to_numpy(float)
+        flagged = keys.map(s[support["flag_column"]].astype(str).str.lower().eq("true")).eq(True).to_numpy()
+        psf_filled = pd.Series(_knn_resized_rate_fill(
+            coords, psf.to_numpy(), painted_area, area.to_numpy(float), ~flagged,
+            float(support["size_elasticity"]), knn_k), index=out_index)
+        beyond = pd.Series(flagged | (area.fillna(0).to_numpy(float) > edge), index=out_index)
+    else:
+        psf_filled = pd.Series(_knn_median_fill(coords, psf.to_numpy(), knn_k), index=out_index)
+        beyond = pd.Series(False, index=out_index)
     source = pd.Series(np.where(matched, "surface", "knn"), index=out_index)
 
-    area = pd.to_numeric(gdf[area_col], errors="coerce")
     market = pd.to_numeric(gdf["market_value"], errors="coerce")
     cat = pd.to_numeric(gdf["category_code"].astype(str).str.strip(), errors="coerce").astype("Int64").astype(str)
     is_vac = cat.isin(set(str(c) for c in vacant_codes))
 
     land = (psf_filled * area).clip(lower=0).fillna(0.0)
+    # Bare by OPA's own split too, not by the category code alone: OPA books most of the value
+    # of many vacant-coded parcels (parking lots, parkland) to a building line, and carrying its
+    # land figure alone would strip that value out of land. Those have a total to cap against.
+    opa_land = pd.to_numeric(gdf[carry_col], errors="coerce") if support else None
+    carried = (beyond & is_vac & opa_land.notna() & (market.fillna(0).clip(lower=0) - opa_land.fillna(0)).le(1.0)
+               if support else beyond & is_vac)
+    surface_value_on_carried = float(land[carried].sum())
+    if carried.any():
+        land = land.where(~carried, opa_land.fillna(0.0).clip(lower=0))
+        source = source.where(~carried, "opa_beyond_support")
     pre_cap = float(land.sum())
     mv = market.fillna(0).clip(lower=0)
     exceeds = (land > mv) & ~is_vac & (mv > 0)
@@ -807,8 +887,13 @@ def paint_land_surface(
         "cap_removed_share": (pre_cap - post_cap) / pre_cap if pre_cap > 0 else float("nan"),
         "median_psf_matched": float(psf[matched].median()) if matched.any() else float("nan"),
         "median_psf_knn": float(psf_filled[~matched].median()) if (~matched).any() else float("nan"),
+        "support_edge_sqft": float(support["edge_sqft"]) if support else None,
+        "n_beyond_support": int(beyond.sum()),
+        "n_carried_at_opa": int(carried.sum()),
+        "carried_value": float(land[carried].sum()),
+        "surface_value_on_carried": surface_value_on_carried,
     }
-    return LandSurfaceResult(psf_filled, land, source, diagnostics)
+    return LandSurfaceResult(psf_filled, land, source, diagnostics, beyond)
 
 
 @dataclass(frozen=True)
@@ -1401,8 +1486,14 @@ def reallocate_land_within_total(
     )
 
 
-def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str = "s5_land"):
-    """Take the sales-based land value whole on parcels that carry no building.
+LARGE_TRACT_TREATMENTS = ("carry_opa", "opa_relevelled", "surface")
+
+
+def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str = "s5_land", *,
+                    beyond_support=None, large_tracts: str = "carry_opa", uncarried_land=None,
+                    opa_level: "float | None" = None):
+    """Take the sales-based land value whole on parcels that carry no building -- where the
+    sales can speak to a lot that size.
 
     `reallocate_land_within_total` caps land at the parcel's own total, which for a bare lot IS
     its land: the re-split can then never assess such a lot above what OPA already says, and where
@@ -1421,17 +1512,51 @@ def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str =
     The parcel's own exemption is carried in dollars (144 bare parcels have one, nearly all partial
     institutional relief, which is relief against total value and so does not follow the split).
 
+    "What it sells for" is known only for lots like the ones that sold. The surface publishes the
+    lot size past which its held-out sales stop showing it to be better than OPA
+    (`land_beyond_support` in the export, from philly_open_avmkit's `support_edge.csv`); its rate
+    there is an extrapolation from comparables a tenth the size or smaller, and on a bare lot
+    nothing bounds it. `beyond_support` is that flag as a boolean array, and `large_tracts` says
+    what a flagged bare lot is worth:
+
+    - ``carry_opa`` (the default): OPA's own value, so the lot's bill moves with the rate alone.
+      Conservative, not correct -- OPA runs low on the large tracts that do sell.
+    - ``opa_relevelled``: OPA's value divided by `opa_level`, its measured median ratio to price
+      on still-vacant sales beyond the edge. The other end of the range.
+    - ``surface``: `uncarried_land`, the extrapolated rate taken whole. Reported so the size of
+      the question stays visible.
+
+    With `beyond_support=None` every bare lot takes `new_land_col` whole, for a surface that
+    publishes no edge.
+
     `alloc` is the reallocation of `frame` on `new_land_col`; `taxable` marks the parcels that pay
     tax at all. Returns the taxable land and building lines with bare lots re-valued, and the
     bare-lot mask. The one-pager and the abatement phase-in both use this, so the two describe one
     reform.
     """
+    import numpy as np
+
+    if large_tracts not in LARGE_TRACT_TREATMENTS:
+        raise ValueError(f"large_tracts must be one of {LARGE_TRACT_TREATMENTS}, got {large_tracts!r}")
     land = alloc.alloc_taxable_land.to_numpy().copy()
     building = alloc.alloc_taxable_building.to_numpy().copy()
     gross_total = (frame.taxable_land + frame.exempt_land + frame.taxable_building + frame.exempt_building).to_numpy()
     bare = taxable & ((frame.taxable_building + frame.exempt_building).to_numpy() <= 1.0)
     exempt_dollars = (gross_total - alloc.reconstructed_taxable_total.to_numpy()).clip(min=0)
-    land[bare] = (frame[new_land_col].to_numpy()[bare] - exempt_dollars[bare]).clip(min=0)
+    whole = frame[new_land_col].to_numpy(dtype=float).copy()
+    if beyond_support is not None:
+        beyond = bare & np.asarray(beyond_support, dtype=bool)
+        if large_tracts == "carry_opa":
+            whole[beyond] = gross_total[beyond]
+        elif large_tracts == "opa_relevelled":
+            if not opa_level or opa_level <= 0:
+                raise ValueError("large_tracts='opa_relevelled' needs opa_level, OPA's measured median ratio")
+            whole[beyond] = gross_total[beyond] / float(opa_level)
+        else:
+            if uncarried_land is None:
+                raise ValueError("large_tracts='surface' needs uncarried_land, the surface's own value")
+            whole[beyond] = np.asarray(uncarried_land, dtype=float)[beyond]
+    land[bare] = (whole[bare] - exempt_dollars[bare]).clip(min=0)
     building[bare] = 0.0
     return land, building, bare
 
