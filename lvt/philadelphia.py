@@ -23,7 +23,8 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
-           "LandReallocation", "reallocate_land_within_total", "HOMESTEAD_ORDERS",
+           "LandReallocation", "reallocate_land_within_total", "uncap_bare_land", "LARGE_TRACT_TREATMENTS",
+           "HOMESTEAD_ORDERS",
            "LandSurfaceResult", "paint_land_surface",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES",
            "SURFACE_PARKING_CODES", "SURFACE_PARKING_WITH_STRUCTURE_RE", "PARKING_GARAGE_RE",
@@ -1478,6 +1479,81 @@ def reallocate_land_within_total(
         alloc_land, alloc_building, new_land_out, new_bldg_out, new_total, rec_total, kind,
         p.institutional, diagnostics,
     )
+
+
+LARGE_TRACT_TREATMENTS = ("carry_opa", "opa_relevelled", "surface")
+
+
+def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str = "s5_land", *,
+                    beyond_support=None, large_tracts: str = "carry_opa", uncarried_land=None,
+                    opa_level: "float | None" = None):
+    """Take the sales-based land value whole on parcels that carry no building -- where the
+    sales can speak to a lot that size.
+
+    `reallocate_land_within_total` caps land at the parcel's own total, which for a bare lot IS
+    its land: the re-split can then never assess such a lot above what OPA already says, and where
+    the sales estimate is LOWER it books the shortfall as `alloc_building` -- a building line on a
+    lot with no building. Under the flat rate that function models this is harmless (the two lines
+    sum to the same total, so the bill is identical, which is the sense in which its docstring says
+    vacant parcels never move). Stacking a split rate on top is what makes it bite: measured on
+    TY2026, 14,831 of 30,564 taxable vacant lots would have a phantom $0.82B taxed at the building
+    rate, and the other half would have their under-assessment frozen in place.
+
+    So the cap is lifted exactly where there is no improvement to hold a total fixed against. For a
+    bare lot "hold the total fixed" and "value the land at what it sells for" are the same
+    instruction, and a total that disagrees with the sales evidence is an assessment error, not a
+    constraint. Nothing with a building on it is touched, and no building is ever revalued.
+
+    The parcel's own exemption is carried in dollars (144 bare parcels have one, nearly all partial
+    institutional relief, which is relief against total value and so does not follow the split).
+
+    "What it sells for" is known only for lots like the ones that sold. The surface publishes the
+    lot size past which its held-out sales stop showing it to be better than OPA
+    (`land_beyond_support` in the export, from philly_open_avmkit's `support_edge.csv`); its rate
+    there is an extrapolation from comparables a tenth the size or smaller, and on a bare lot
+    nothing bounds it. `beyond_support` is that flag as a boolean array, and `large_tracts` says
+    what a flagged bare lot is worth:
+
+    - ``carry_opa`` (the default): OPA's own value, so the lot's bill moves with the rate alone.
+      Conservative, not correct -- OPA runs low on the large tracts that do sell.
+    - ``opa_relevelled``: OPA's value divided by `opa_level`, its measured median ratio to price
+      on still-vacant sales beyond the edge. The other end of the range.
+    - ``surface``: `uncarried_land`, the extrapolated rate taken whole. Reported so the size of
+      the question stays visible.
+
+    With `beyond_support=None` every bare lot takes `new_land_col` whole, for a surface that
+    publishes no edge.
+
+    `alloc` is the reallocation of `frame` on `new_land_col`; `taxable` marks the parcels that pay
+    tax at all. Returns the taxable land and building lines with bare lots re-valued, and the
+    bare-lot mask. The one-pager and the abatement phase-in both use this, so the two describe one
+    reform.
+    """
+    import numpy as np
+
+    if large_tracts not in LARGE_TRACT_TREATMENTS:
+        raise ValueError(f"large_tracts must be one of {LARGE_TRACT_TREATMENTS}, got {large_tracts!r}")
+    land = alloc.alloc_taxable_land.to_numpy().copy()
+    building = alloc.alloc_taxable_building.to_numpy().copy()
+    gross_total = (frame.taxable_land + frame.exempt_land + frame.taxable_building + frame.exempt_building).to_numpy()
+    bare = taxable & ((frame.taxable_building + frame.exempt_building).to_numpy() <= 1.0)
+    exempt_dollars = (gross_total - alloc.reconstructed_taxable_total.to_numpy()).clip(min=0)
+    whole = frame[new_land_col].to_numpy(dtype=float).copy()
+    if beyond_support is not None:
+        beyond = bare & np.asarray(beyond_support, dtype=bool)
+        if large_tracts == "carry_opa":
+            whole[beyond] = gross_total[beyond]
+        elif large_tracts == "opa_relevelled":
+            if not opa_level or opa_level <= 0:
+                raise ValueError("large_tracts='opa_relevelled' needs opa_level, OPA's measured median ratio")
+            whole[beyond] = gross_total[beyond] / float(opa_level)
+        else:
+            if uncarried_land is None:
+                raise ValueError("large_tracts='surface' needs uncarried_land, the surface's own value")
+            whole[beyond] = np.asarray(uncarried_land, dtype=float)[beyond]
+    land[bare] = (whole[bare] - exempt_dollars[bare]).clip(min=0)
+    building[bare] = 0.0
+    return land, building, bare
 
 
 # --- Commercial property: building type and zoning family -------------------------------------

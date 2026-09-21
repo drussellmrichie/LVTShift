@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lvt.philadelphia import (  # noqa: E402
     HOMESTEAD_ORDERS,
+    uncap_bare_land,
     compute_lycd_land_values,
     carry_forward_exemptions,
     compute_residual_building_value,
@@ -700,6 +701,29 @@ def test_carry_forward_takes_the_homestead_order_too():
     assert (res.reform_taxable_land.iloc[0], res.reform_taxable_building.iloc[0]) == pytest.approx((0, 150_000))
 
 
+def test_uncap_bare_land_values_bare_lots_at_the_sales_estimate():
+    """A bare lot takes its sales-based land whole, up or down, with no phantom building line and
+    its own relief carried in dollars; a parcel with a building is left exactly as re-split."""
+    df = pd.DataFrame({
+        #                 bare, up   built   bare+relief  bare, down
+        "taxable_land":     [50_000, 60_000, 30_000, 50_000],
+        "taxable_building": [0.0, 140_000, 0.0, 0.0],
+        "exempt_land":      [0.0, 0.0, 20_000, 0.0],
+        "exempt_building":  [0.0, 0.0, 0.0, 0.0],
+        "homestead_exemption": [0.0, 0.0, 0.0, 0.0],
+        "s5_land":          [80_000, 90_000, 80_000, 30_000],
+    })
+    alloc = reallocate_land_within_total(df, new_land_col="s5_land", homestead_cap=100_000)
+    assert alloc.alloc_building.iloc[3] == pytest.approx(20_000)       # the phantom line being removed
+    land, building, bare = uncap_bare_land(alloc, df, np.ones(len(df), bool))
+    assert list(bare) == [True, False, True, True]
+    assert land == pytest.approx([80_000, 90_000, 60_000, 30_000])
+    assert building == pytest.approx([0, 110_000, 0, 0])
+    # a parcel that pays no tax is never touched
+    land_x, _, bare_x = uncap_bare_land(alloc, df, np.array([False, True, True, True]))
+    assert not bare_x[0] and land_x[0] == pytest.approx(alloc.alloc_taxable_land.iloc[0])
+
+
 def test_homestead_order_is_validated():
     df = _homestead_home(60_000, 190_000)
     with pytest.raises(ValueError, match="homestead_order must be one of"):
@@ -843,3 +867,35 @@ def test_paint_surface_with_support_requires_the_surfaces_columns():
     gdf, surface = _supported_city()
     with pytest.raises(KeyError):
         paint_land_surface(gdf, surface[["parcel_number", "s2_k20"]], rate_col="s2_k20", support=SUPPORT)
+
+
+def test_uncap_bare_land_carries_opa_on_a_bare_lot_beyond_the_support_edge():
+    """A bare lot the land sales cannot test keeps OPA's value; the other two readings of it are
+    the range. Within the edge, and with no edge published, nothing changes."""
+    df = pd.DataFrame({
+        #                  bare, beyond  bare, within  built, beyond
+        "taxable_land":     [100_000.0, 100_000.0, 40_000.0],
+        "taxable_building": [0.0, 0.0, 160_000.0],
+        "exempt_land":      [0.0, 0.0, 0.0],
+        "exempt_building":  [0.0, 0.0, 0.0],
+        "homestead_exemption": [0.0, 0.0, 0.0],
+        "s5_land":          [900_000.0, 900_000.0, 90_000.0],
+    })
+    alloc = reallocate_land_within_total(df, new_land_col="s5_land", homestead_cap=100_000)
+    pays, beyond = np.ones(3, bool), np.array([True, False, True])
+    old, _, _ = uncap_bare_land(alloc, df, pays)
+    carried, building, bare = uncap_bare_land(alloc, df, pays, beyond_support=beyond)
+    assert list(bare) == [True, True, False]
+    assert carried[0] == pytest.approx(100_000) and carried[1] == pytest.approx(900_000)
+    assert old[0] == pytest.approx(900_000)                 # no edge published: taken whole, as before
+    assert carried[2] == old[2] and building[2] > 0         # a flagged parcel WITH a building is untouched
+    relevelled, _, _ = uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="opa_relevelled",
+                                       opa_level=0.8)
+    assert relevelled[0] == pytest.approx(125_000)
+    whole, _, _ = uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="surface",
+                                  uncarried_land=np.array([750_000.0, 1.0, 1.0]))
+    assert whole[0] == pytest.approx(750_000) and whole[1] == pytest.approx(900_000)
+    with pytest.raises(ValueError, match="opa_level"):
+        uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="opa_relevelled")
+    with pytest.raises(ValueError, match="large_tracts must be one of"):
+        uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="keep")

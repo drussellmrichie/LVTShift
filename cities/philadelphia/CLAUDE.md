@@ -326,6 +326,16 @@ quote from there, not from here.**
   `cap / value` at any pair of rates, so a homestead home and its unexempted twin change by the
   same percentage. `scripts/philadelphia_council_one_pager.py --homestead-order` picks the
   headline order, and its `homestead_comparison` reports all four.
+- **The one-pager and the abatement phase-in describe one reform only on matching options.**
+  By default `philadelphia_abatement_phase_in.py` holds today's levy (so its status-quo rate falls
+  as abatements expire), never re-values bare lots, and applies the homestead building-first.
+  The one-pager holds today's rate, values bare lots at S5 whole (`uncap_bare_land`, shared by
+  both), and takes `--homestead-order`. Run the phase-in with `--homestead-order <same>
+  --baseline rate --revalue-bare-lots`; those runs write suffixed outputs and a `_meta.json`, and
+  the one-pager's `payback()` refuses a run built on other options or whose final-year rates
+  stray from its own. The two abated cohorts still differ a little (the phase-in uses the
+  schedule classification, the one-pager `expand_abatement_cohort`), which is what the rate
+  tolerance absorbs.
 - **`paint_land_surface`** (notebook Step 2b, `LVT_LAND_SURFACE=<column>`) swaps an externally
   estimated land **rate** onto this repo's parcels, from
   `philly_open_avmkit`'s `out/land/land_surfaces_ty<YEAR>.csv` (keyed `parcel_number`; `s2_k20`
