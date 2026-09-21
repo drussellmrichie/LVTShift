@@ -51,8 +51,8 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from lvt.philadelphia import (  # noqa: E402
-    HOMESTEAD_ORDERS, _decompose_exemptions, expand_abatement_cohort, parcel_cache_path,
-    reallocate_land_within_total, split_zero_building_parcels, tax_year_params,
+    COMMERCIAL_OTHER, HOMESTEAD_ORDERS, _decompose_exemptions, commercial_building_type, expand_abatement_cohort,
+    parcel_cache_path, reallocate_land_within_total, split_zero_building_parcels, tax_year_params, zoning_family,
 )
 
 TAX_YEAR = 2026
@@ -63,6 +63,10 @@ OUT = REPO_ROOT / "analysis/political/philadelphia_council_one_pager"
 SURFACE_EXPORT = DATA / f"philadelphia_lycd_reassessment_ty{TAX_YEAR}_s5.csv"
 PHASE_IN_PANEL = DATA / "philadelphia_abatement_phase_in_panel.parquet"
 GATHERED_JSON = REPO_ROOT / "analysis/reports/philadelphia/vacant_parking_gathered.json"
+OPA_ATTRIBUTES = REPO_ROOT / "analysis/ownership/philadelphia/opa_attributes.parquet"   # fetch_opa_attributes.py
+COMMERCIAL_GROUP = "commercial/mixed/other"
+MAX_OTHER_TAX_SHARE = 0.05       # the building-type rules must place 95% of the sector's tax
+MIN_CELL_PARCELS = 10            # zoning x type cells smaller than this are left out of the cross-table
 READ = dict(encoding="utf-8", encoding_errors="replace")
 
 CATEGORY_MAP = {
@@ -367,6 +371,91 @@ def homestead_comparison(g, post, category, abated, taxable, homes, groups, q, p
     )
 
 
+def load_opa_attributes(g: pd.DataFrame) -> pd.DataFrame:
+    """OPA building code, description and zoning for each parcel, aligned to `g`."""
+    from philadelphia_abatement_phase_in import _pid
+
+    if not OPA_ATTRIBUTES.exists():
+        raise FileNotFoundError(f"{OPA_ATTRIBUTES.relative_to(REPO_ROOT)} is missing; run "
+                                "analysis/ownership/philadelphia/fetch_opa_attributes.py")
+    cols = ["building_code", "building_code_description", "zoning"]
+    a = pd.read_parquet(OPA_ATTRIBUTES, columns=["parcel_number", *cols])
+    a["key"] = _pid(a.parcel_number)
+    a = a.drop_duplicates("key").set_index("key")
+    key = _pid(g.parcel_number)
+    return pd.DataFrame({c: key.map(a[c]).to_numpy() for c in cols}, index=g.index)
+
+
+def commercial_breakdown(g: pd.DataFrame, groups: pd.Series, taxable: np.ndarray, s, order: str) -> dict:
+    """The flyer's 'Commercial' bar taken apart: by building type, by zoning, and by both.
+
+    With each total held fixed, a parcel pays more exactly when its land share is above the
+    citywide break-even, so the breakdown reports each group's median land share beside its
+    bill change: that is the mechanism, not a coincidence of neighbourhood.
+    """
+    attrs = load_opa_attributes(g)
+    keep = (groups == COMMERCIAL_GROUP).to_numpy() & (taxable | (s.new > 0) | (s.current > 0))
+    gross = (s.r.alloc_land + s.r.alloc_building).to_numpy()
+    land_share = np.divide(s.r.alloc_land.to_numpy(), gross, out=np.full(len(gross), np.nan), where=gross > 0)
+    d = pd.DataFrame(dict(
+        building_type=commercial_building_type(attrs.building_code_description, attrs.building_code).to_numpy(),
+        zoning=zoning_family(attrs.zoning).to_numpy(),
+        described=attrs.building_code_description.notna().to_numpy(), zoned=attrs.zoning.notna().to_numpy(),
+        cur=s.current, new=s.new, land_share=land_share))[keep]
+
+    described, zoned = float(d.described.mean()), float(d.zoned.mean())
+    other_share = float(d.cur[d.building_type == COMMERCIAL_OTHER].sum() / d.cur.sum())
+    assert described >= 0.99 and zoned >= 0.98, (
+        f"only {described:.1%} of the sector has an OPA building description and {zoned:.1%} a zoning code; "
+        f"is {OPA_ATTRIBUTES.name} from a different vintage than the parcel cache?")
+    assert other_share <= MAX_OTHER_TAX_SHARE, (
+        f"{other_share:.1%} of the sector's tax is in '{COMMERCIAL_OTHER}': the rules in "
+        "lvt.philadelphia.COMMERCIAL_BUILDING_TYPES have fallen behind OPA's building descriptions")
+
+    def stats(x: pd.DataFrame) -> dict:
+        return dict(parcels=int(len(x)), today_musd=float(x.cur.sum() / 1e6),
+                    change_musd=float((x.new - x.cur).sum() / 1e6),
+                    change_pct=float(100 * (x.new.sum() / x.cur.sum() - 1)) if x.cur.sum() > 0 else None,
+                    pay_more_pct=float(100 * (x.new > x.cur).mean()), pay_less_pct=float(100 * (x.new < x.cur).mean()),
+                    median_land_share_pct=float(100 * x.land_share.median()))
+
+    def table(by) -> dict:
+        rows = {(" | ".join(k) if isinstance(k, tuple) else k): stats(x)
+                for k, x in d.groupby(by) if len(x) >= (MIN_CELL_PARCELS if isinstance(by, list) else 1)}
+        return dict(sorted(rows.items(), key=lambda kv: -kv[1]["change_musd"]))
+
+    by_type = table("building_type")
+    total = float((d.new - d.cur).sum() / 1e6)
+    assert abs(sum(v["change_musd"] for v in by_type.values()) - total) < 1e-6, "building types do not add up to the sector"
+    stamp = pd.Timestamp(OPA_ATTRIBUTES.stat().st_mtime, unit="s").strftime("%Y-%m-%d")
+    return dict(
+        basis=dict(
+            sector=f"the '{COMMERCIAL_GROUP}' property group, the flyer's 'Commercial' bar",
+            homestead_order=order,
+            building_type="OPA building_code_description, grouped by lvt.philadelphia.commercial_building_type "
+                          "(parking by building_code)",
+            zoning="OPA zoning, grouped by lvt.philadelphia.zoning_family",
+            attributes=f"{OPA_ATTRIBUTES.relative_to(REPO_ROOT).as_posix()}, OPA's current properties table "
+                       f"(file dated {stamp}); the cross-table omits cells under {MIN_CELL_PARCELS} parcels",
+            caveat="S5 is fitted on small-lot land sales and values expensive land relatively low, so the cuts "
+                   "to towers and the increases on large lots are the model's least reliable figures",
+        ),
+        coverage=dict(parcels=int(len(d)), change_musd=total, described_pct=100 * described, zoned_pct=100 * zoned,
+                      other_tax_pct=100 * other_share),
+        by_building_type=by_type,
+        by_zoning=table("zoning"),
+        by_zoning_and_building_type=table(["zoning", "building_type"]),
+    )
+
+
+def print_commercial_breakdown(c: dict) -> None:
+    for key in ("by_building_type", "by_zoning"):
+        t = pd.DataFrame(c[key]).T[["parcels", "today_musd", "change_musd", "change_pct", "pay_more_pct",
+                                    "median_land_share_pct"]]
+        print(f"\nCommercial / mixed / other, {key.replace('_', ' ')} ({c['basis']['homestead_order']}):")
+        print(t.astype(float).round(1).to_string())
+
+
 def payback() -> dict:
     """How long an abated owner takes to recoup, from the phase-in panel's own scenarios.
 
@@ -576,12 +665,17 @@ def main() -> None:
         transition=payback(),
         vacant_and_parking=json.loads(GATHERED_JSON.read_text()),
         homestead_comparison=homestead_comparison(g, post, category, abated, taxable, homes, groups, q, params),
+        commercial_breakdown=commercial_breakdown(g, groups, taxable, headline, order),
     )
+    sector = numbers["by_property_group"][COMMERCIAL_GROUP]["change_musd"]
+    assert abs(numbers["commercial_breakdown"]["coverage"]["change_musd"] - sector) < 0.01, \
+        "commercial breakdown does not reproduce its sector's change"
     (OUT / "numbers.json").write_text(json.dumps(numbers, indent=2), encoding="utf-8")
     render_map()
     print(json.dumps({k: numbers[k] for k in
                       ("rates", "homes", "by_property_group", "homes_profile", "transition")}, indent=2))
     print_homestead_comparison(numbers["homestead_comparison"])
+    print_commercial_breakdown(numbers["commercial_breakdown"])
     print(f"wrote {OUT}")
 
 

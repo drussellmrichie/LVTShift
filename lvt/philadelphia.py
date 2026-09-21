@@ -13,6 +13,7 @@ model itself (that runs on the combined levy).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,9 +23,11 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
-           "LandReallocation", "reallocate_land_within_total",
+           "LandReallocation", "reallocate_land_within_total", "HOMESTEAD_ORDERS",
            "LandSurfaceResult", "paint_land_surface",
-           "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES"]
+           "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES",
+           "SURFACE_PARKING_CODES", "SURFACE_PARKING_WITH_STRUCTURE_RE", "PARKING_GARAGE_RE",
+           "COMMERCIAL_BUILDING_TYPES", "COMMERCIAL_OTHER", "commercial_building_type", "zoning_family"]
 
 
 @dataclass(frozen=True)
@@ -1396,3 +1399,81 @@ def reallocate_land_within_total(
         alloc_land, alloc_building, new_land_out, new_bldg_out, new_total, rec_total, kind,
         p.institutional, diagnostics,
     )
+
+
+# --- Commercial property: building type and zoning family -------------------------------------
+# Neither field is in the parcel cache; `analysis/ownership/philadelphia/fetch_opa_attributes.py`
+# pulls `building_code`, `building_code_description` and `zoning` from OPA as a sidecar.
+#
+# Parking is read from the CODE, and these three are the repo's one definition of it (the
+# ownership analysis imports them). Its descriptions collide with two things that are not
+# parking lots: `5R` CONDO PARKING SPACE, a deeded space inside a garage, and R10/R30/R5x
+# ROW B/GAR rowhouses, which a match on `R*` alone would sweep in.
+SURFACE_PARKING_CODES = frozenset({"RA", "RB", "RE"})           # RA non-commercial; RB unpaid, RE paid commercial
+SURFACE_PARKING_WITH_STRUCTURE_RE = re.compile(r"^R[A-F]\d$")   # a lot with a booth or building: RC0, RD6, RF0
+PARKING_GARAGE_RE = re.compile(r"^O[AB]\d$")                    # GAR W/COMM AREA (OA*), GAR NO COMM AREA (OB*)
+
+# Everything else is read from the DESCRIPTION: OPA's codes run two schemes (commercial `LC0`
+# warehouse, residential-style `O30` rowhouse), and the description is what a reviewer can check.
+# First match wins, so the order matters: condos before industrial (INDUS CONDO), storefronts
+# before plain rowhouses (ROW W/OFF STR).
+COMMERCIAL_BUILDING_TYPES = (
+    ("Condominium units", r"^(?:COM CONDO|INDUS CONDO|CONDO )"),
+    ("Land coded vacant, air rights", r"^(?:VACANT LAND|AIR RIGHTS)"),
+    ("Offices and banks", r"^(?:OFF BLD|BANK/OFF|MISC RESEARCH)"),
+    ("Hotels", r"^(?:HOTEL|MOTEL)"),
+    ("Shopping centres and supermarkets", r"^(?:SHOP CENT|SUPERMKT|DEPT)"),
+    ("Gas stations and auto businesses", r"^(?:GAS STAT|AUTO )"),
+    ("Restaurants and bars", r"^(?:REST'?RNT|TAVERN|FAST ?FOOD|DINER)"),
+    ("Warehouses, factories, other industrial", r"^(?:IND\b|INDUS|COLD STORAGE|ASSEMBLY PLANT|PUB UTIL)"),
+    ("Storefronts with offices or apartments", r"^(?:STR/OFF|ROW W/OFF|ROW B/OFF|S/D OFF|DET OFF)"),
+    ("Stores and services", r"^(?:STORE|CLEANING|LAUNDR)"),
+    ("Health, schools, worship, entertainment",
+     r"^(?:HEALTH FAC|SCHOOL|HSE WORSHIP|AMUSE?\b|MISC DAY CARE|MISC MUSEUM|MISC FUNERAL|CEMETERY)"),
+    ("Houses and apartments in commercial categories", r"^(?:ROW|APT|S/D|DET|TWIN)"),
+)
+COMMERCIAL_OTHER = "Other"
+
+
+def commercial_building_type(description, code) -> "pd.Series":
+    """Group OPA building descriptions into the types a Council staffer would recognise.
+
+    `description` and `code` are aligned Series of OPA's `building_code_description` and
+    `building_code`. Parking comes from the code (see the comment above), everything else from the
+    description by `COMMERCIAL_BUILDING_TYPES`; anything unmatched is "Other", and a caller that
+    reports these groups should check how much tax lands there.
+    """
+    import numpy as np
+    import pandas as pd
+
+    desc = description.fillna("").astype(str).str.strip().str.upper()
+    c = code.fillna("").astype(str).str.strip().str.upper()
+    garage = c.str.match(PARKING_GARAGE_RE.pattern)
+    lot = c.isin(SURFACE_PARKING_CODES) | c.str.match(SURFACE_PARKING_WITH_STRUCTURE_RE.pattern)
+    conditions = [garage.to_numpy(), lot.to_numpy()] + [desc.str.contains(p, regex=True).to_numpy()
+                                                        for _, p in COMMERCIAL_BUILDING_TYPES]
+    labels = ["Parking garages", "Parking lots"] + [label for label, _ in COMMERCIAL_BUILDING_TYPES]
+    return pd.Series(np.select(conditions, labels, default=COMMERCIAL_OTHER), index=description.index)
+
+
+def zoning_family(zoning) -> "pd.Series":
+    """Group Philadelphia zoning codes by the Zoning Code's own district families.
+
+    OPA writes codes without the hyphen (`CMX5`, `CA1`, `SPPOA`), so they are normalised first.
+    """
+    import numpy as np
+    import pandas as pd
+
+    z = zoning.fillna("").astype(str).str.upper().str.replace(r"[\s-]", "", regex=True)
+    families = [
+        ("CMX-5 Center City core", z == "CMX5"),
+        ("CMX-4 Center City commercial", z == "CMX4"),
+        ("CMX-3 community commercial", z == "CMX3"),
+        ("CMX-1/2/2.5 neighborhood commercial", z.isin(["CMX1", "CMX2", "CMX2.5"])),
+        ("CA-1/2 auto-oriented commercial", z.isin(["CA1", "CA2"])),
+        ("Industrial (I-1/2/3, I-P, ICMX, IRMX)", z.isin(["I1", "I2", "I3", "IP", "ICMX", "IRMX"])),
+        ("Special purpose (SP)", z.str.startswith("SP")),
+        ("Residential zoning", z.str.startswith("R")),
+    ]
+    return pd.Series(np.select([m.to_numpy() for _, m in families], [f for f, _ in families], default="Unmatched"),
+                     index=zoning.index)
