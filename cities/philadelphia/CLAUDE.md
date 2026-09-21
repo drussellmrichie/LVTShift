@@ -362,8 +362,10 @@ quote from there, not from here.**
   (`land_beyond_support` in the export). And a flagged parcel with a VACANT category code is
   carried at `opa_gross_land`, `land_surface_source == 'opa_beyond_support'`. Improved
   parcels are deliberately left alone: the cap at `market_value` already bounds them.
-  `uncap_bare_land` in the one-pager applies the same rule to its own, wider definition of
-  bare (no building value, whatever the category code), and `numbers.json`'s
+  `uncap_bare_land` applies the same rule to its own, wider definition of bare (no building
+  value, whatever the category code) through its `beyond_support` argument, which the
+  one-pager AND the abatement phase-in both pass -- the phase-in must, or the one-pager's
+  `payback()` would be reading a different reform and refuse the run. `numbers.json`'s
   `large_tract_range` solves the reform under all three readings of those lots — OPA's value
   (the headline), OPA re-levelled by its measured ratio, and the extrapolated rate taken
   whole — so the vacant-land and homes figures can be printed as a range. The notebook also
