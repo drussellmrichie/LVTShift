@@ -858,24 +858,68 @@ def _decompose_exemptions(gdf, homestead_col: str, match_tolerance: float) -> _E
                            hs_active, other_exempt, homestead_wiped, institutional)
 
 
-def _apply_exemptions(new_land, bldg, other_exempt, parts: _ExemptionParts, homestead_cap: float):
+HOMESTEAD_ORDERS = ("building_first", "land_first", "value_share", "tax_share")
+
+
+def _check_homestead_order(homestead_order: str, rate_ratio) -> None:
+    if homestead_order not in HOMESTEAD_ORDERS:
+        raise ValueError(f"homestead_order must be one of {HOMESTEAD_ORDERS}, not {homestead_order!r}")
+    if homestead_order == "tax_share" and not (rate_ratio is not None and float(rate_ratio) > 0):
+        raise ValueError("homestead_order='tax_share' weights land by the land/building rate ratio; "
+                         "pass it as a positive rate_ratio")
+
+
+def _apply_exemptions(new_land, bldg, other_exempt, parts: _ExemptionParts, homestead_cap: float,
+                      *, homestead_order: str = "building_first", rate_ratio: "float | None" = None):
     """Building-first application of the dollar exemptions, then the homestead at min(cap, value).
 
     `other_exempt` is passed explicitly (rather than read from `parts`) because the two reform
     functions differ in exactly this: carry-forward keeps the recorded dollars, reallocation
     re-derives an abatement's dollars from the new building value.
+
+    `homestead_order` decides which line the homestead is drawn against. The amount is
+    `min(cap, value)` under every order, so at a single rate the order cannot move a bill. Under a
+    split rate it decides what the exclusion is worth:
+
+    - ``building_first`` -- off the improvement, the remainder off land. This is the law, 53
+      Pa.C.S. Sec. 8583(c): in a political subdivision taxing land and improvements at different
+      rates, the exclusion "shall be applied first to the value of the improvements". OPA's
+      TY2026 records follow it on every homestead-only parcel. Worth `cap x building rate`.
+    - ``land_first`` -- off land, the remainder off the improvement. Worth `cap x land rate`
+      while the land line covers the cap.
+    - ``value_share`` -- in proportion to the two lines' values, so the exclusion cuts the
+      parcel's bill by the fraction `cap / value` at any pair of rates.
+    - ``tax_share`` -- in proportion to each line's share of the parcel's tax before the
+      exclusion: land weighted by `rate_ratio`, the land/building rate ratio.
+
+    Every order other than the statutory one needs Sec. 8583(c) amended. Whatever one line cannot
+    absorb falls on the other, so the amount exempted is the same under every order.
     """
     import numpy as np
     import pandas as pd
 
+    _check_homestead_order(homestead_order, rate_ratio)
     idx = parts.gross_land.index
     b1 = (bldg - other_exempt).clip(lower=0)
     spill = (other_exempt - bldg).clip(lower=0)
     l1 = (new_land - spill).clip(lower=0)
     hs_ex = pd.Series(np.where(parts.homestead_active, np.minimum(homestead_cap, b1 + l1), 0.0), index=idx)
-    b2 = (b1 - hs_ex).clip(lower=0)
-    spill2 = (hs_ex - b1).clip(lower=0)
-    l2 = (l1 - spill2).clip(lower=0)
+    if homestead_order == "building_first":
+        b2 = (b1 - hs_ex).clip(lower=0)
+        spill2 = (hs_ex - b1).clip(lower=0)
+        l2 = (l1 - spill2).clip(lower=0)
+    else:
+        h, b, l = hs_ex.to_numpy(float), np.asarray(b1, float), np.asarray(l1, float)
+        if homestead_order == "land_first":
+            want_from_land = h
+        else:
+            k = 1.0 if homestead_order == "value_share" else float(rate_ratio)
+            denom = k * l + b
+            want_from_land = h * np.divide(k * l, denom, out=np.zeros_like(h), where=denom > 0)
+        # h <= b + l, so the land line can always take between max(0, h - b) and min(h, l).
+        from_land = np.clip(want_from_land, np.clip(h - b, 0, None), np.minimum(h, l))
+        l2 = pd.Series(np.clip(l - from_land, 0, None), index=idx)
+        b2 = pd.Series(np.clip(b - (h - from_land), 0, None), index=idx)
     b2 = b2.where(~parts.institutional, 0.0)
     l2 = l2.where(~parts.institutional, 0.0)
     return l2, b2
@@ -930,6 +974,8 @@ def carry_forward_exemptions(
     match_tolerance: float = 1.0,
     reconstruction_floor: float = 0.95,
     gross_building_override: "pd.Series | None" = None,
+    homestead_order: str = "building_first",
+    homestead_rate_ratio: "float | None" = None,
 ) -> ExemptionCarryForward:
     """Re-apply each parcel's existing exemptions to a base whose LAND value has changed.
 
@@ -993,6 +1039,10 @@ def carry_forward_exemptions(
         instead of OPA's own `taxable_building + exempt_building`. Aligned to `gdf.index`;
         missing/negative values are treated as 0. Leave `None` for the existing behavior
         (building held at OPA's own recorded value, land alone revised).
+    homestead_order, homestead_rate_ratio
+        Which line the homestead is drawn against in the reform; see `_apply_exemptions`. The
+        default is the statutory building-first order, and the guard always uses it, because it
+        checks the rule against OPA's records.
 
     Returns
     -------
@@ -1000,6 +1050,7 @@ def carry_forward_exemptions(
     """
     import pandas as pd
 
+    _check_homestead_order(homestead_order, homestead_rate_ratio)
     p = _decompose_exemptions(gdf, homestead_col, match_tolerance)
 
     # Guard: OPA's own land AND OPA's own building through the same rule must reproduce OPA's
@@ -1013,7 +1064,8 @@ def carry_forward_exemptions(
         bldg_for_reform = gross_building_override.reindex(gdf.index).fillna(0.0).clip(lower=0).astype(float)
     else:
         bldg_for_reform = p.gross_building
-    ref_land, ref_bldg = _apply_exemptions(new_land, bldg_for_reform, p.other_exempt, p, homestead_cap)
+    ref_land, ref_bldg = _apply_exemptions(new_land, bldg_for_reform, p.other_exempt, p, homestead_cap,
+                                           homestead_order=homestead_order, rate_ratio=homestead_rate_ratio)
 
     diagnostics = {
         "n_homestead_active": int(p.homestead_active.sum()),
@@ -1025,6 +1077,7 @@ def carry_forward_exemptions(
         "reconstruction_match_rate": match_rate,
         "reconstruction_mismatch_dollars": mismatch_dollars,
         "homestead_cap": float(homestead_cap),
+        "homestead_order": homestead_order,
         "used_gross_building_override": gross_building_override is not None,
     }
     return ExemptionCarryForward(
@@ -1161,6 +1214,8 @@ def reallocate_land_within_total(
     homestead_col: str = "homestead_exemption",
     match_tolerance: float = 1.0,
     reconstruction_floor: float = 0.95,
+    homestead_order: str = "building_first",
+    homestead_rate_ratio: "float | None" = None,
 ) -> LandReallocation:
     """Re-split OPA's own total assessment into a new land component and a residual building.
 
@@ -1202,6 +1257,13 @@ def reallocate_land_within_total(
 
     Fully exempt parcels whose exemption the homestead cannot explain (`full`) stay fully exempt.
 
+    **Under a split rate the homestead's line matters.** Everything above holds at one rate. Once a
+    caller taxes `alloc_taxable_land` and `alloc_taxable_building` at different rates, which line
+    the homestead comes off decides what it is worth, and the statutory building-first order makes
+    it worth `cap x building rate`. `homestead_order` selects the rule (see `_apply_exemptions`);
+    the taxable total, `reform_change` and every count here are the same under all of them, and
+    only the split between the two taxable lines differs.
+
     **Read the effect off `reform_change`, not off OPA's recorded taxable total.** The exemption
     rule reproduces OPA's own bill on 99.5% of TY2026 parcels, not all of them -- OPA's
     `homestead_exemption` column sometimes records the statutory cap while a smaller amount was
@@ -1231,6 +1293,12 @@ def reallocate_land_within_total(
         total here, so an uncapped column is safe to pass.
     homestead_cap : float
         The tax year's statutory Homestead Exemption, from `tax_year_params(year)`.
+    homestead_order : str, default "building_first"
+        Which line the homestead is drawn against in the reform: "building_first" (53 Pa.C.S.
+        Sec. 8583(c), current law), "land_first", "value_share" or "tax_share". The guard always
+        uses the statutory order, because it checks the rule against OPA's records.
+    homestead_rate_ratio : float, optional
+        The land/building rate ratio; required for "tax_share".
 
     Returns
     -------
@@ -1239,6 +1307,7 @@ def reallocate_land_within_total(
     import numpy as np
     import pandas as pd
 
+    _check_homestead_order(homestead_order, homestead_rate_ratio)
     p = _decompose_exemptions(gdf, homestead_col, match_tolerance)
     gross_total = p.gross_land + p.gross_building
 
@@ -1285,7 +1354,8 @@ def reallocate_land_within_total(
     alloc_land = np.minimum(proposed, gross_total)
     alloc_building = (gross_total - alloc_land).clip(lower=0)
     new_land_out, new_bldg_out = _apply_exemptions(
-        alloc_land, alloc_building, _exempt_dollars(alloc_building), p, homestead_cap)
+        alloc_land, alloc_building, _exempt_dollars(alloc_building), p, homestead_cap,
+        homestead_order=homestead_order, rate_ratio=homestead_rate_ratio)
     new_total = new_land_out + new_bldg_out
 
     kind = pd.Series("none", index=p.gross_land.index, dtype=object)
@@ -1320,6 +1390,7 @@ def reallocate_land_within_total(
         "reconstruction_match_rate": match_rate,
         "reconstruction_mismatch_dollars": mismatch_dollars,
         "homestead_cap": float(homestead_cap),
+        "homestead_order": homestead_order,
     }
     return LandReallocation(
         alloc_land, alloc_building, new_land_out, new_bldg_out, new_total, rec_total, kind,

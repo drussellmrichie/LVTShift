@@ -23,14 +23,25 @@ transition, and this script reads its panel for the payback figures. Modeling th
 baseline that still carries 14k abatements would credit the reform with revenue that current law
 already collects a few years later.
 
+The Homestead Exemption decides who among homeowners gains. At one rate its line does not matter;
+under a split rate it is worth `cap x building rate` when drawn building-first, which is what 53
+Pa.C.S. Sec. 8583(c) requires, so the shift that cuts rentals' bills raises most owner-occupants'.
+`--homestead-order` picks the order the headline figures use (default: the statute), and
+`homestead_comparison` in numbers.json reports every order side by side. The payback figures are
+read from the phase-in panel, which is statutory throughout and does not follow the flag.
+
+    python scripts/philadelphia_council_one_pager.py [--homestead-order land_first]
+
 Outputs (analysis/political/philadelphia_council_one_pager/, gitignored):
     numbers.json         every figure the one-pager prints
     gathered_light.png   print variant of the vacant + parking gathered-square map
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -40,8 +51,8 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from lvt.philadelphia import (  # noqa: E402
-    expand_abatement_cohort, parcel_cache_path, reallocate_land_within_total, split_zero_building_parcels,
-    tax_year_params,
+    HOMESTEAD_ORDERS, _decompose_exemptions, expand_abatement_cohort, parcel_cache_path,
+    reallocate_land_within_total, split_zero_building_parcels, tax_year_params,
 )
 
 TAX_YEAR = 2026
@@ -63,6 +74,12 @@ CATEGORY_MAP = {
 }
 GENUINE_VACANT_CODES = {"6", "12", "13"}
 HOMES = {"Single Family Residential", "Small Multi-Family (2-4 units)", "Other Residential"}
+HOMESTEAD_LABELS = {
+    "building_first": "off the building first, remainder off land (53 Pa.C.S. Sec. 8583(c), current law)",
+    "land_first": "off land first, remainder off the building",
+    "value_share": "in proportion to land and building value",
+    "tax_share": f"in proportion to each line's share of the tax (land weighted {RATIO:g}:1)",
+}
 
 PAPER_CITY_FILL = "#E4E0D4"
 PAPER_CITY_EDGE = "#1F3A68"
@@ -201,6 +218,155 @@ def bill_stats(cur: np.ndarray, new: np.ndarray, mask: np.ndarray) -> dict:
                 median_change_usd=float(np.median(n - c)), median_current_bill_usd=float(np.median(c)))
 
 
+def shift(post: pd.DataFrame, taxable: np.ndarray, params, homestead_order: str, ratio: float = RATIO):
+    """The reform at one homestead order and one rate ratio: taxable lines, today's bill, the new bill."""
+    r = reallocate_land_within_total(post, new_land_col="s5_land", homestead_cap=params.homestead_exemption,
+                                     homestead_order=homestead_order, homestead_rate_ratio=ratio)
+    base_total = r.reconstructed_taxable_total.to_numpy()   # the same rule on OPA's own land
+    land, building, bare = uncap_bare_land(r, post, taxable)
+    current = base_total * params.combined_mills / 1000
+    revenue = float(current.sum())
+    land_mills, building_mills = solve_split_rate(land, building, revenue, ratio)
+    new = (land * land_mills + building * building_mills) / 1000
+    assert abs(new.sum() / revenue - 1) < 1e-9, "split-rate solve is not revenue-neutral"
+    return SimpleNamespace(r=r, base_total=base_total, land=land, building=building, bare=bare, current=current,
+                           revenue=revenue, land_mills=land_mills, building_mills=building_mills, new=new)
+
+
+def sector_totals(groups: pd.Series, taxable: np.ndarray, current: np.ndarray, new: np.ndarray) -> pd.DataFrame:
+    by_group = (pd.DataFrame(dict(g=groups, cur=current, new=new))[taxable | (new > 0) | (current > 0)]
+                .groupby("g").agg(cur=("cur", "sum"), new=("new", "sum"), parcels=("cur", "size")))
+    by_group["change_pct"] = 100 * (by_group.new / by_group.cur - 1)
+    by_group["change_musd"] = (by_group.new - by_group.cur) / 1e6
+    return by_group
+
+
+def neighbourhood_profile(q: pd.DataFrame, current: np.ndarray, new: np.ndarray, mask: np.ndarray) -> dict:
+    """Aggregate change and share paying less, by income and non-white-share quintile of block groups."""
+    profile = {}
+    for col in ("inc_q", "min_q"):
+        d = pd.DataFrame(dict(level=q[col], cur=current, new=new))[mask & (current > 0)]
+        profile[col] = {str(k): dict(homes_pct=float(100 * (s.new.sum() / s.cur.sum() - 1)),
+                                     pay_less_pct=float(100 * (s.new < s.cur).mean()),
+                                     median_change_usd=float(np.median(s.new - s.cur)))
+                        for k, s in d.groupby("level", observed=True)}
+    return profile
+
+
+def cohort_stats(cur: np.ndarray, new: np.ndarray, mask: np.ndarray) -> dict:
+    s = bill_stats(cur, new, mask)
+    d = (new - cur)[mask & (cur > 0)]
+    s.update(pay_more_pct=float(100 * (d > 0).mean()),
+             median_increase_of_those_paying_more_usd=float(np.median(d[d > 0])) if (d > 0).any() else 0.0)
+    return s
+
+
+def owner_occupied_proxy(g: pd.DataFrame, homestead: np.ndarray, abated: np.ndarray) -> np.ndarray:
+    """The phase-in script's proxy: a 1-4-unit home whose individual owner's mailing address is the home.
+
+    It catches owner-occupants who never claimed the Homestead Exemption (roughly 237k claim it
+    against roughly 344k owner-occupied units in the ACS). Reused, not re-derived, so the two
+    scripts cannot disagree about who is an owner-occupant; its own agreement guard still runs.
+    """
+    from philadelphia_abatement_phase_in import _pid, owner_occupied
+
+    df = pd.DataFrame(dict(parcel_number=_pid(g.parcel_number), owner_1=g.owner_1,
+                           category_code=g.category_code, is_abatement=abated))
+    occupied = owner_occupied(df, homestead)
+    print(f"owner-occupancy proxy: {occupied.sum():,} parcels; agrees with the homestead on "
+          f"{df.attrs['occupancy_agreement']:.1%} of homesteaded non-abated homes")
+    return occupied
+
+
+def house_bills(land, building, homestead: bool, order: str, params, land_mills: float, building_mills: float):
+    """Today's and the reformed bill for made-up parcels, through the same library rule as the roll.
+
+    Each is recorded as OPA records a homestead today (building first), then re-split at its own
+    land value, so only the homestead's line under `order` changes.
+    """
+    cap = params.homestead_exemption
+    land, building = np.atleast_1d(np.asarray(land, float)), np.atleast_1d(np.asarray(building, float))
+    ex = np.where(homestead, np.minimum(cap, land + building), 0.0)
+    off_building = np.minimum(ex, building)
+    df = pd.DataFrame(dict(taxable_land=land - (ex - off_building), taxable_building=building - off_building,
+                           exempt_land=ex - off_building, exempt_building=off_building,
+                           homestead_exemption=np.where(homestead, cap, 0.0), new_land=land))
+    r = reallocate_land_within_total(df, new_land_col="new_land", homestead_cap=cap,
+                                     homestead_order=order, homestead_rate_ratio=RATIO)
+    today = r.reconstructed_taxable_total.to_numpy() * params.combined_mills / 1000
+    after = (r.alloc_taxable_land.to_numpy() * land_mills + r.alloc_taxable_building.to_numpy() * building_mills) / 1000
+    return today, after
+
+
+def typical_home(land: float, building: float, order: str, params, land_mills: float, building_mills: float) -> dict:
+    """One house with the Homestead Exemption and the same house without it, plus each one's break-even.
+
+    The break-even is the land share of a house of this total value below which it pays less; the
+    house without the exemption breaks even at the same share whatever the order.
+    """
+    out = {}
+    shares = np.linspace(0, 1, 2001)
+    value = land + building
+    for tag, hs in (("with_homestead", True), ("without_homestead", False)):
+        today, after = house_bills(land, building, hs, order, params, land_mills, building_mills)
+        t_grid, a_grid = house_bills(shares * value, (1 - shares) * value, hs, order, params, land_mills, building_mills)
+        pays_more = a_grid >= t_grid
+        out[tag] = dict(today_usd=float(today[0]), after_usd=float(after[0]), change_usd=float(after[0] - today[0]),
+                        pays_less_below_land_share_pct=float(100 * (shares[pays_more.argmax()] if pays_more.any() else 1.0)))
+    return out
+
+
+def homestead_comparison(g, post, category, abated, taxable, homes, groups, q, params) -> dict:
+    """Every homestead order side by side, for homestead recipients and for owner-occupants more widely."""
+    hs = _decompose_exemptions(post, "homestead_exemption", 1.0).homestead_active.to_numpy()
+    occupied = hs | owner_occupied_proxy(g, hs, abated)
+    sfr = (category == "Single Family Residential").to_numpy()
+    cohorts = {
+        "all_homes": homes, "homestead": homes & hs, "no_homestead": homes & ~hs,
+        "owner_occupied": homes & occupied, "not_owner_occupied": homes & ~occupied,
+        "single_family": homes & sfr, "two_to_four_units": homes & (category == "Small Multi-Family (2-4 units)").to_numpy(),
+    }
+    orders = {}
+    for order in HOMESTEAD_ORDERS:
+        s = shift(post, taxable, params, order)
+        if order == HOMESTEAD_ORDERS[0]:
+            # the typical homestead home is a fact about the land split, not about the order
+            m = homes & sfr & (s.r.exemption_kind == "homestead").to_numpy() & (s.current > 0)
+            house_land, house_building = float(np.median(s.r.alloc_land[m])), float(np.median(s.r.alloc_building[m]))
+        only = homes & (s.r.exemption_kind == "homestead").to_numpy() & (s.current > 0)
+        worth_today = ((s.r.alloc_land + s.r.alloc_building).to_numpy() - s.base_total) * params.combined_mills / 1000
+        worth_after = ((s.r.alloc_land.to_numpy() - s.land) * s.land_mills
+                       + (s.r.alloc_building.to_numpy() - s.building) * s.building_mills) / 1000
+        sectors = sector_totals(groups, taxable, s.current, s.new)
+        orders[order] = dict(
+            rule=HOMESTEAD_LABELS[order],
+            land_rate_pct=float(s.land_mills / 10), building_rate_pct=float(s.building_mills / 10),
+            exemption_worth_usd=dict(median_today=float(np.median(worth_today[only])),
+                                     median_after=float(np.median(worth_after[only]))),
+            homes={name: cohort_stats(s.current, s.new, mask) for name, mask in cohorts.items()},
+            by_property_group={k: dict(change_musd=round(float(v.change_musd), 2), change_pct=round(float(v.change_pct), 2))
+                               for k, v in sectors.iterrows()},
+            profile={name: neighbourhood_profile(q, s.current, s.new, cohorts[name])
+                     for name in ("all_homes", "homestead", "owner_occupied")},
+            typical_home=typical_home(house_land, house_building, order, params, s.land_mills, s.building_mills),
+        )
+    return dict(
+        basis=dict(
+            homes="taxable 1-4-unit homes with a bill today",
+            homestead="OPA records a Homestead Exemption and some value is exempt in the TY2026 assessment",
+            owner_occupied="homestead, or an individual owner whose mailing address is the home "
+                           "(philadelphia_abatement_phase_in.owner_occupied)",
+            typical_home=f"median land ${house_land:,.0f} and median building ${house_building:,.0f} (gross, before "
+                         "the exemption) of homestead-only single-family homes; not the same house as the median bill",
+            caveats=["formerly abated homes (the abatement bars the homestead) are not granted it once it expires",
+                     "every order but building_first needs 53 Pa.C.S. Sec. 8583(c) amended",
+                     "rates are re-solved revenue-neutral under each order",
+                     "the payback figures under `transition` are statutory and do not follow the order"],
+        ),
+        orders=orders,
+    )
+
+
 def payback() -> dict:
     """How long an abated owner takes to recoup, from the phase-in panel's own scenarios.
 
@@ -332,6 +498,13 @@ def render_map() -> None:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Numbers and map for the Council candidate LVT one-pager.")
+    ap.add_argument("--homestead-order", choices=HOMESTEAD_ORDERS, default="building_first",
+                    help="which line the Homestead Exemption comes off in the headline figures "
+                         "(default building_first, 53 Pa.C.S. Sec. 8583(c)); homestead_comparison "
+                         "reports every order regardless")
+    order = ap.parse_args().homestead_order
+
     OUT.mkdir(parents=True, exist_ok=True)
     params = tax_year_params(TAX_YEAR)
     millage = params.combined_mills
@@ -339,13 +512,12 @@ def main() -> None:
     g = load_parcels()
     category, abated, restored_building, full_exempt = classify(g)
     post = expire_abatements(g, abated, restored_building)
-
-    r = reallocate_land_within_total(post, new_land_col="s5_land", homestead_cap=params.homestead_exemption)
-    print(r.describe())
-
-    base_total = r.reconstructed_taxable_total.to_numpy()   # the same rule on OPA's own land
     taxable = ~full_exempt
-    land, building, bare = uncap_bare_land(r, post, taxable)
+
+    headline = shift(post, taxable, params, order)
+    r, base_total, land, building, bare = headline.r, headline.base_total, headline.land, headline.building, headline.bare
+    print(r.describe())
+    print(f"homestead exemption applied {HOMESTEAD_LABELS[order]}")
 
     # A parcel with a building on it keeps its total: the reform can only change how that total is
     # split, so the only such bills that move are the ones whose relief depends on the split.
@@ -355,36 +527,24 @@ def main() -> None:
           f"Taxable total unchanged on {identical[built].mean():.2%} of the {built.sum():,} taxable "
           f"parcels that have a building ({(~identical & built).sum():,} move, split-dependent relief)")
 
-    current = base_total * millage / 1000
-    revenue = float(current.sum())
-    land_mills, building_mills = solve_split_rate(land, building, revenue, RATIO)
-    new = (land * land_mills + building * building_mills) / 1000
-    assert abs(new.sum() / revenue - 1) < 1e-9, "split-rate solve is not revenue-neutral"
+    current, revenue, new = headline.current, headline.revenue, headline.new
+    land_mills, building_mills = headline.land_mills, headline.building_mills
 
     homes = category.isin(HOMES).to_numpy() & taxable
     groups = category.map(property_group)
     q, edges = strata(g, homes)
 
-    by_group = (pd.DataFrame(dict(g=groups, cur=current, new=new))[taxable | (new > 0) | (current > 0)]
-                .groupby("g").agg(cur=("cur", "sum"), new=("new", "sum"), parcels=("cur", "size")))
-    by_group["change_pct"] = 100 * (by_group.new / by_group.cur - 1)
-    by_group["change_musd"] = (by_group.new - by_group.cur) / 1e6
-
-    profile = {}
-    for col in ("inc_q", "min_q"):
-        d = pd.DataFrame(dict(level=q[col], cur=current, new=new))[homes & (current > 0)]
-        profile[col] = {str(k): dict(homes_pct=float(100 * (s.new.sum() / s.cur.sum() - 1)),
-                                     pay_less_pct=float(100 * (s.new < s.cur).mean()),
-                                     median_change_usd=float(np.median(s.new - s.cur)))
-                        for k, s in d.groupby("level", observed=True)}
+    by_group = sector_totals(groups, taxable, current, new)
+    profile = neighbourhood_profile(q, current, new, homes)
 
     # The ratio is the only lever this reform has, so price it: with the total fixed, a parcel pays
     # less exactly when its land share sits below the citywide average, and the ratio sets how hard
-    # that bites. Reported so the flyer's 4:1 is a choice with a stated cost, not a default.
+    # that bites. Reported so the flyer's 4:1 is a choice with a stated cost, not a default. Each
+    # ratio is its own solve because the tax_share homestead order weights land by the ratio.
     sweep = {}
     for ratio in (1.5, 2.0, 2.5, 3.0, 4.0, 5.0):
-        lm, bm = solve_split_rate(land, building, revenue, ratio)
-        alt = (land * lm + building * bm) / 1000
+        alt_shift = headline if ratio == RATIO else shift(post, taxable, params, order, ratio)
+        lm, bm, alt = alt_shift.land_mills, alt_shift.building_mills, alt_shift.new
         s = bill_stats(current, alt, homes)
         s.update(land_rate_pct=float(lm / 10), building_rate_pct=float(bm / 10),
                  vacant_change_pct=float(100 * (alt[(groups == "vacant land").to_numpy()].sum()
@@ -398,6 +558,7 @@ def main() -> None:
                    construction=("OPA total held fixed where there is a building: land = min(S5, total), "
                                  "building = total - land. On bare lots the cap is lifted and land = S5."),
                    horizon="after today's 10-year abatements have expired",
+                   homestead_order=order, homestead_rule=HOMESTEAD_LABELS[order],
                    bare_lots_revalued=int(bare.sum()),
                    built_parcels=int(built.sum()),
                    built_total_unchanged_pct=float(100 * identical[built].mean())),
@@ -414,12 +575,30 @@ def main() -> None:
         quintile_edges=edges,
         transition=payback(),
         vacant_and_parking=json.loads(GATHERED_JSON.read_text()),
+        homestead_comparison=homestead_comparison(g, post, category, abated, taxable, homes, groups, q, params),
     )
     (OUT / "numbers.json").write_text(json.dumps(numbers, indent=2), encoding="utf-8")
     render_map()
     print(json.dumps({k: numbers[k] for k in
                       ("rates", "homes", "by_property_group", "homes_profile", "transition")}, indent=2))
+    print_homestead_comparison(numbers["homestead_comparison"])
     print(f"wrote {OUT}")
+
+
+def print_homestead_comparison(c: dict) -> None:
+    rows = {}
+    for order, o in c["orders"].items():
+        row = {"land rate %": o["land_rate_pct"], "building rate %": o["building_rate_pct"],
+               "exemption worth $": o["exemption_worth_usd"]["median_after"]}
+        for name, s in o["homes"].items():
+            row[f"{name}: pay less %"] = s["pay_less_pct"]
+            row[f"{name}: $M"] = s["aggregate_change_musd"]
+        for k, v in o["by_property_group"].items():
+            row[f"sector {k}: $M"] = v["change_musd"]
+        rows[order] = row
+    print("\nHomestead order comparison (exemption worth today: "
+          f"${next(iter(c['orders'].values()))['exemption_worth_usd']['median_today']:,.0f})")
+    print(pd.DataFrame(rows).round(2).to_string())
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ from shapely.geometry import Point
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lvt.philadelphia import (  # noqa: E402
+    HOMESTEAD_ORDERS,
     compute_lycd_land_values,
     carry_forward_exemptions,
     compute_residual_building_value,
@@ -622,6 +623,89 @@ def test_reallocate_requires_homestead_column():
     df = _exemption_cases().drop(columns=["homestead_exemption"])
     with pytest.raises(ValueError, match="homestead_exemption"):
         _realloc(df, 1.0)
+
+
+# --- homestead_order: which line the Homestead Exemption comes off -------------------------
+# Irrelevant at one rate, decisive under a split rate. 53 Pa.C.S. Sec. 8583(c) says building
+# first; the other orders are what an amendment could say.
+
+def _homestead_home(land, building, cap=100_000.0):
+    """One homestead parcel as OPA records it today: the exclusion off the building first."""
+    off_building = min(cap, building)
+    return pd.DataFrame({
+        "taxable_land": [land - (cap - off_building)], "taxable_building": [building - off_building],
+        "exempt_land": [cap - off_building], "exempt_building": [off_building],
+        "homestead_exemption": [cap],
+    })
+
+
+def _split(order, land, building, **kw):
+    res = _realloc(_homestead_home(land, building), [land], homestead_order=order, **kw)
+    return res.alloc_taxable_land.iloc[0], res.alloc_taxable_building.iloc[0]
+
+
+def test_homestead_order_moves_only_the_split():
+    """$60k land, $190k building, $100k exclusion: the same $150k is taxable under every order;
+    only the line it sits on changes."""
+    assert _split("building_first", 60_000, 190_000) == pytest.approx((60_000, 90_000))
+    assert _split("land_first", 60_000, 190_000) == pytest.approx((0, 150_000))
+    assert _split("value_share", 60_000, 190_000) == pytest.approx((36_000, 114_000))       # 24% off land
+    w = 4 * 60_000 / (4 * 60_000 + 190_000)                                               # land's tax share at 4:1
+    assert _split("tax_share", 60_000, 190_000, homestead_rate_ratio=4.0) == pytest.approx(
+        (60_000 - w * 100_000, 190_000 - (1 - w) * 100_000))
+
+
+def test_homestead_order_spills_what_a_line_cannot_absorb():
+    """Land-first and tax-share both want more than $50k of land can give; the rest comes off the
+    building, and the amount exempted is still the whole $100k."""
+    assert _split("land_first", 50_000, 100_000) == pytest.approx((0, 50_000))
+    assert _split("tax_share", 50_000, 100_000, homestead_rate_ratio=4.0) == pytest.approx((0, 50_000))
+    assert _split("building_first", 50_000, 100_000) == pytest.approx((50_000, 0))
+
+
+def test_value_share_cuts_the_bill_by_cap_over_value_at_any_rates():
+    land, building = _split("value_share", 60_000, 190_000)
+    for land_mills, building_mills in ((25.5, 6.4), (14.0, 14.0), (40.0, 2.0)):
+        gross_bill = 60_000 * land_mills + 190_000 * building_mills
+        assert land * land_mills + building * building_mills == pytest.approx((1 - 100_000 / 250_000) * gross_bill)
+
+
+def test_homestead_order_leaves_totals_counts_and_guard_unchanged():
+    """The order is invisible at one rate: taxable totals, reform_change, the change count and the
+    reconstruction guard are identical under every order, on every kind of exemption."""
+    df = _exemption_cases()
+    base = _realloc(df, 2 * (df.taxable_land + df.exempt_land).values)
+    assert base.diagnostics["homestead_order"] == "building_first"
+    for order in HOMESTEAD_ORDERS:
+        res = _realloc(df, 2 * (df.taxable_land + df.exempt_land).values,
+                       homestead_order=order, homestead_rate_ratio=4.0)
+        assert np.allclose(res.alloc_taxable_total, base.alloc_taxable_total)
+        assert np.allclose(res.reform_change, base.reform_change)
+        assert res.diagnostics["n_taxable_changed"] == base.diagnostics["n_taxable_changed"]
+        assert res.diagnostics["reconstruction_match_rate"] == 1.0
+        assert res.diagnostics["homestead_order"] == order
+
+
+def test_default_homestead_order_is_statutory():
+    df = _exemption_cases()
+    new_land = 2 * (df.taxable_land + df.exempt_land).values
+    default, explicit = _realloc(df, new_land), _realloc(df, new_land, homestead_order="building_first")
+    assert np.array_equal(default.alloc_taxable_land, explicit.alloc_taxable_land)
+    assert np.array_equal(default.alloc_taxable_building, explicit.alloc_taxable_building)
+
+
+def test_carry_forward_takes_the_homestead_order_too():
+    df = _homestead_home(60_000, 190_000).assign(new_land=60_000.0, market_value=250_000.0)
+    res = carry_forward_exemptions(df, new_land_col="new_land", homestead_cap=100_000, homestead_order="land_first")
+    assert (res.reform_taxable_land.iloc[0], res.reform_taxable_building.iloc[0]) == pytest.approx((0, 150_000))
+
+
+def test_homestead_order_is_validated():
+    df = _homestead_home(60_000, 190_000)
+    with pytest.raises(ValueError, match="homestead_order must be one of"):
+        _realloc(df, [60_000], homestead_order="pro_rata")
+    with pytest.raises(ValueError, match="rate_ratio"):
+        _realloc(df, [60_000], homestead_order="tax_share")
 
 
 # --- paint_land_surface: an external $/sqft surface onto LVTShift's own parcels ------------
