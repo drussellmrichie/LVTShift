@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from lvt.philadelphia import (  # noqa: E402
     HOMESTEAD_ORDERS,
+    uncap_bare_land,
     compute_lycd_land_values,
     carry_forward_exemptions,
     compute_residual_building_value,
@@ -698,6 +699,29 @@ def test_carry_forward_takes_the_homestead_order_too():
     df = _homestead_home(60_000, 190_000).assign(new_land=60_000.0, market_value=250_000.0)
     res = carry_forward_exemptions(df, new_land_col="new_land", homestead_cap=100_000, homestead_order="land_first")
     assert (res.reform_taxable_land.iloc[0], res.reform_taxable_building.iloc[0]) == pytest.approx((0, 150_000))
+
+
+def test_uncap_bare_land_values_bare_lots_at_the_sales_estimate():
+    """A bare lot takes its sales-based land whole, up or down, with no phantom building line and
+    its own relief carried in dollars; a parcel with a building is left exactly as re-split."""
+    df = pd.DataFrame({
+        #                 bare, up   built   bare+relief  bare, down
+        "taxable_land":     [50_000, 60_000, 30_000, 50_000],
+        "taxable_building": [0.0, 140_000, 0.0, 0.0],
+        "exempt_land":      [0.0, 0.0, 20_000, 0.0],
+        "exempt_building":  [0.0, 0.0, 0.0, 0.0],
+        "homestead_exemption": [0.0, 0.0, 0.0, 0.0],
+        "s5_land":          [80_000, 90_000, 80_000, 30_000],
+    })
+    alloc = reallocate_land_within_total(df, new_land_col="s5_land", homestead_cap=100_000)
+    assert alloc.alloc_building.iloc[3] == pytest.approx(20_000)       # the phantom line being removed
+    land, building, bare = uncap_bare_land(alloc, df, np.ones(len(df), bool))
+    assert list(bare) == [True, False, True, True]
+    assert land == pytest.approx([80_000, 90_000, 60_000, 30_000])
+    assert building == pytest.approx([0, 110_000, 0, 0])
+    # a parcel that pays no tax is never touched
+    land_x, _, bare_x = uncap_bare_land(alloc, df, np.array([False, True, True, True]))
+    assert not bare_x[0] and land_x[0] == pytest.approx(alloc.alloc_taxable_land.iloc[0])
 
 
 def test_homestead_order_is_validated():

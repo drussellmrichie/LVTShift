@@ -6,7 +6,8 @@ Question: if Philadelphia phases in a 4:1 land/building split rate over ten year
 and stops issuing new abatements, what happens to the bills of parcels whose abatement is still
 running -- and what would it cost to protect them for the rest of their abatement?
 
-Every scenario is revenue-neutral against today's levy in every year and static (TY2026 values held
+Every scenario is revenue-neutral in every year (against today's levy by default; see the options
+below) and static (TY2026 values held
 fixed, no new construction, so "no new abatements" changes nothing that is on the roll today). Year
 0 (TY2026) is today's bill everywhere; the reform starts in year 1, the ratio reaches 4:1 in year 10,
 and years 11-15 hold it there so that deferred amounts can be repaid.
@@ -60,6 +61,21 @@ construction abatements:
 Abatement year k is exempt for k <= 10. Expiry is taken on whole tax years; OPA prorates the last
 year by month, which moves one year's bill for each expiring parcel and nothing after it.
 
+Three options put the run on the Council one-pager's basis, so the one-pager's payback figures and
+its long-run front page describe one reform (`scripts/philadelphia_council_one_pager.py` checks):
+
+- `--homestead-order`     which line the Homestead Exemption comes off (`lvt.philadelphia.
+                          HOMESTEAD_ORDERS`; default building_first, 53 Pa.C.S. Sec. 8583(c)).
+- `--baseline rate`       hold today's single RATE instead of today's levy: the status-quo levy then
+                          grows as abatements expire, as it does under current law, and every
+                          scenario raises that year's status-quo levy. Default `levy`.
+- `--revalue-bare-lots`   from year 1 the re-split values bare lots at S5 whole
+                          (`lvt.philadelphia.uncap_bare_land`), as the one-pager does.
+
+A run with any non-default option writes its outputs with a suffix naming them, e.g.
+`philadelphia_abatement_phase_in_value_share_rate_bare_panel.parquet`, beside a `_meta.json` that
+records the options and the final-year rates. The default run's file names are unchanged.
+
 Outputs (analysis/data/, gitignored):
     philadelphia_abatement_phase_in_rates.csv     millages and amount shifted, by scenario x year
     philadelphia_abatement_phase_in_by_year.csv   abated cohort under lvt_phase_in, schedule x year
@@ -76,6 +92,8 @@ Requires:
 """
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 import urllib.parse
 from pathlib import Path
@@ -90,9 +108,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from lvt.philadelphia import (  # noqa: E402
-    _apply_exemptions, _decompose_exemptions, parcel_cache_path, reallocate_land_within_total,
-    tax_year_params,
+    HOMESTEAD_ORDERS, _apply_exemptions, _decompose_exemptions, parcel_cache_path, reallocate_land_within_total,
+    tax_year_params, uncap_bare_land,
 )
+
+DEFAULT_SETTINGS = dict(homestead_order="building_first", baseline="levy", revalue_bare_lots=False)
+
+
+def output_tag(settings: dict) -> str:
+    """'' for the default run, else a suffix naming the options, e.g. '_value_share_rate_bare'."""
+    if settings == DEFAULT_SETTINGS:
+        return ""
+    return (f"_{settings['homestead_order']}_{settings['baseline']}"
+            + ("_bare" if settings["revalue_bare_lots"] else ""))
 
 TAX_YEAR = 2026
 YEARS = 10
@@ -154,7 +182,7 @@ def _pid(s: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce").astype("Int64").astype(str).str.zfill(9)
 
 
-def load_inputs(ty) -> pd.DataFrame:
+def load_inputs(ty, settings: dict = DEFAULT_SETTINGS) -> pd.DataFrame:
     """The parcel cache with S5 land, re-split components, exemption parts and abatement schedule."""
     gdf = gpd.read_parquet(parcel_cache_path(TAX_YEAR, data_dir=CITY_DATA))
     gdf = pd.DataFrame(gdf.drop(columns="geometry"))
@@ -185,6 +213,13 @@ def load_inputs(ty) -> pd.DataFrame:
         "rebuild the S5 export before trusting this run")
     df["alloc_land"], df["alloc_building"] = alloc.alloc_land, alloc.alloc_building
     df["exemption_kind"] = alloc.exemption_kind
+    df.attrs["settings"] = dict(settings)
+    if settings["revalue_bare_lots"]:
+        # The one-pager's rule, from the same library function, applied to the same frame.
+        pays = ~((df["taxable_land"] <= 0) & (df["taxable_building"] <= 0)).to_numpy()
+        land_u, _, bare = uncap_bare_land(alloc, df, pays)
+        df["is_bare"] = bare
+        df["bare_taxable_land"] = np.where(bare, land_u, 0.0)
 
     parts = _decompose_exemptions(df, "homestead_exemption", MATCH_TOL)
     df["gross_land"], df["gross_building"] = parts.gross_land, parts.gross_building
@@ -361,11 +396,20 @@ def running_abatement(df: pd.DataFrame, t: int) -> np.ndarray:
     return df["is_abatement"].to_numpy() & (np.nan_to_num(k, nan=np.inf) <= ABATEMENT_LIFE)
 
 
-def taxable(df: pd.DataFrame, land: pd.Series, building: pd.Series, t: int, cap: float) -> Tuple[pd.Series, pd.Series]:
+def taxable(df: pd.DataFrame, land: pd.Series, building: pd.Series, t: int, cap: float,
+            resplit: bool = False, ratio: float = 1.0) -> Tuple[pd.Series, pd.Series]:
+    """Taxable land and building lines in year t. `resplit` marks the S5 re-split (the reform)."""
+    s = df.attrs["settings"]
     share = pd.Series(exempt_share(df, t), index=df.index)
     other = pd.Series(np.where(df["exemption_kind"] == "building_share", share * building, df["other_exempt"]),
                       index=df.index).clip(lower=0)
-    return _apply_exemptions(land, building, other, df.attrs["parts"], cap)
+    tl, tb = _apply_exemptions(land, building, other, df.attrs["parts"], cap,
+                               homestead_order=s["homestead_order"], rate_ratio=ratio)
+    if resplit and t >= 1 and s["revalue_bare_lots"]:
+        bare = df["is_bare"].to_numpy()
+        tl = tl.where(~bare, df["bare_taxable_land"])
+        tb = tb.where(~bare, 0.0)
+    return tl, tb
 
 
 
@@ -420,7 +464,8 @@ def solve_design(weighted: np.ndarray, revenue: float, eligible: np.ndarray, ref
 def run(df: pd.DataFrame, ty) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
     cap = ty.homestead_exemption
     parts = df.attrs["parts"]
-    revenue = float(df["current_tax"].sum())
+    hold_levy = df.attrs["settings"]["baseline"] == "levy"
+    revenue = float(df["current_tax"].sum())      # today's levy, held every year by the levy baseline
     abated = df["is_abatement"].to_numpy()
     owner = df["owner_occupied"].to_numpy()
 
@@ -443,10 +488,12 @@ def run(df: pd.DataFrame, ty) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
         bills[f"running_{t}"] = running
         sq_l, sq_b = [x.to_numpy() for x in taxable(df, parts.gross_land, parts.gross_building, t, cap)]
         sq_w = sq_l + sq_b
-        sq = sq_w * revenue / sq_w.sum()
+        # The levy every scenario raises this year: today's, or today's rate on this year's roll.
+        levy = revenue if hold_levy else float(sq_w.sum()) * ty.combined_mills / 1000
+        sq = sq_w * levy / sq_w.sum()
         if t == 0:
             year = {k: sq for k in SCENARIOS}
-            mills = {k: (revenue * 1000 / sq_w.sum(),) * 2 for k in SCENARIOS}
+            mills = {k: (levy * 1000 / sq_w.sum(),) * 2 for k in SCENARIOS}
             bills.update({f"{k}_{t}": v for k, v in year.items()})
             for k in SCENARIOS:
                 rows.append(dict(scenario=k, t=t, tax_year=TAX_YEAR, ratio=1.0, land_mills=mills[k][0],
@@ -455,14 +502,15 @@ def run(df: pd.DataFrame, ty) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
             continue
 
         ratio = ratio_for(t)
-        rs_l, rs_b = [x.to_numpy() for x in taxable(df, df["alloc_land"], df["alloc_building"], t, cap)]
+        rs_l, rs_b = [x.to_numpy() for x in taxable(df, df["alloc_land"], df["alloc_building"], t, cap,
+                                                    resplit=True, ratio=ratio)]
         rs_w, lvt_w = rs_l + rs_b, ratio * rs_l + rs_b
-        rs = rs_w * revenue / rs_w.sum()
-        lvt = lvt_w * revenue / lvt_w.sum()
+        rs = rs_w * levy / rs_w.sum()
+        lvt = lvt_w * levy / lvt_w.sum()
         ref_bills = {"status_quo": sq, "resplit_flat": rs}
         year = {"status_quo": sq, "resplit_flat": rs, "lvt_phase_in": lvt}
-        mills = {"status_quo": (revenue * 1000 / sq_w.sum(),) * 2, "resplit_flat": (revenue * 1000 / rs_w.sum(),) * 2,
-                 "lvt_phase_in": (ratio * revenue * 1000 / lvt_w.sum(), revenue * 1000 / lvt_w.sum())}
+        mills = {"status_quo": (levy * 1000 / sq_w.sum(),) * 2, "resplit_flat": (levy * 1000 / rs_w.sum(),) * 2,
+                 "lvt_phase_in": (ratio * levy * 1000 / lvt_w.sum(), levy * 1000 / lvt_w.sum())}
         limited, repaid = {}, {}
 
         # Deferral: an abatement that ended last year starts repaying what it was spared.
@@ -476,7 +524,7 @@ def run(df: pd.DataFrame, ty) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
             eligible = running & (owner if owner_only else True)
             p = (max(0.0, 1.0 - 0.1 * (t - 1)) if kind == "declining"
                  else need_share[name] if kind == "share" else param)
-            target = revenue - (due.sum() if name == "hh_defer" else 0.0)
+            target = levy - (due.sum() if name == "hh_defer" else 0.0)
             charged, raw, bm = solve_design(lvt_w, target, eligible, ref_bills[ref_name], kind, p)
             if name == "hh_defer":
                 owed += np.where(eligible, raw - charged, 0.0)
@@ -497,7 +545,7 @@ def run(df: pd.DataFrame, ty) -> Tuple[Dict[str, np.ndarray], pd.DataFrame]:
                              parcels_limited=limited.get(k, 0), repayments=repaid.get(k, 0.0)))
         bills.update({f"{k}_{t}": v for k, v in year.items()})
         for k in SCENARIOS:
-            assert abs(year[k].sum() - revenue) < 1.0, f"{k} year {t} is not revenue-neutral"
+            assert abs(year[k].sum() - levy) < 1.0, f"{k} year {t} is not revenue-neutral"
 
     assert (left == 0).all() and np.allclose(owed, 0.0), "deferred amounts not fully repaid within the horizon"
     return bills, pd.DataFrame(rows)
@@ -649,10 +697,21 @@ def panel(df: pd.DataFrame, bills: Dict[str, np.ndarray]) -> pd.DataFrame:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Abated parcels' bills under a 10-year LVT phase-in.")
+    ap.add_argument("--homestead-order", choices=HOMESTEAD_ORDERS, default=DEFAULT_SETTINGS["homestead_order"])
+    ap.add_argument("--baseline", choices=("levy", "rate"), default=DEFAULT_SETTINGS["baseline"],
+                    help="hold today's levy (default) or today's rate, as the one-pager does")
+    ap.add_argument("--revalue-bare-lots", action="store_true",
+                    help="value bare lots at S5 whole in the re-split, as the one-pager does")
+    a = ap.parse_args()
+    settings = dict(homestead_order=a.homestead_order, baseline=a.baseline, revalue_bare_lots=a.revalue_bare_lots)
+    tag = output_tag(settings)
+
     ty = tax_year_params(TAX_YEAR)
-    df = load_inputs(ty)
+    df = load_inputs(ty, settings)
     print(f"{len(df):,} parcels; {int(df['is_abatement'].sum()):,} construction abatements on S5 land; "
-          f"levy ${df['current_tax'].sum()/1e9:.3f}B held constant")
+          f"options {settings}; today's levy ${df['current_tax'].sum()/1e9:.3f}B"
+          + (" held constant" if settings["baseline"] == "levy" else ", today's rate held"))
     hm = df.attrs["hmda"]
     oo_abated = df.is_abatement & df.owner_occupied
     print(f"HMDA {hm['years']}: {hm['buyers']:,} owner-occupant buyers; eligible share citywide "
@@ -670,9 +729,17 @@ def main() -> None:
         "designs": designs_summary(df, bills, rates, exp),
         "others": others(df, bills),
     }
+    stem = f"philadelphia_abatement_phase_in{tag}"
     for name, tbl in tables.items():
-        tbl.to_csv(DATA / f"philadelphia_abatement_phase_in_{name}.csv", index=False)
-    panel(df, bills).to_parquet(DATA / "philadelphia_abatement_phase_in_panel.parquet", index=False)
+        tbl.to_csv(DATA / f"{stem}_{name}.csv", index=False)
+    panel(df, bills).to_parquet(DATA / f"{stem}_panel.parquet", index=False)
+    final = rates[(rates.scenario == "lvt_phase_in") & (rates.t == HORIZON)].iloc[0]
+    (DATA / f"{stem}_meta.json").write_text(json.dumps(dict(
+        settings=settings, tax_year=TAX_YEAR, horizon=HORIZON, final_ratio=FINAL_RATIO,
+        parcels=int(len(df)), abatements=int(df["is_abatement"].sum()),
+        final_year_lvt_land_mills=float(final.land_mills), final_year_lvt_building_mills=float(final.building_mills),
+        generated=pd.Timestamp.today().strftime("%Y-%m-%d"),
+    ), indent=2), encoding="utf-8")
 
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 40)
@@ -688,7 +755,7 @@ def main() -> None:
     print("\nHomes without abatements, aggregate % change vs status quo")
     o = tables["others"]
     print(o.pivot(index="tax_year", columns="scenario", values="homes_change_pct").round(2).to_string())
-    print(f"\nWrote five CSVs and a panel to {DATA}")
+    print(f"\nWrote five CSVs, a panel and {stem}_meta.json to {DATA}")
 
 
 if __name__ == "__main__":

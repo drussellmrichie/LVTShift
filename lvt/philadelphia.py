@@ -23,7 +23,7 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "LycdResult", "compute_lycd_land_values",
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
-           "LandReallocation", "reallocate_land_within_total", "HOMESTEAD_ORDERS",
+           "LandReallocation", "reallocate_land_within_total", "uncap_bare_land", "HOMESTEAD_ORDERS",
            "LandSurfaceResult", "paint_land_surface",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES",
            "SURFACE_PARKING_CODES", "SURFACE_PARKING_WITH_STRUCTURE_RE", "PARKING_GARAGE_RE",
@@ -1399,6 +1399,41 @@ def reallocate_land_within_total(
         alloc_land, alloc_building, new_land_out, new_bldg_out, new_total, rec_total, kind,
         p.institutional, diagnostics,
     )
+
+
+def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str = "s5_land"):
+    """Take the sales-based land value whole on parcels that carry no building.
+
+    `reallocate_land_within_total` caps land at the parcel's own total, which for a bare lot IS
+    its land: the re-split can then never assess such a lot above what OPA already says, and where
+    the sales estimate is LOWER it books the shortfall as `alloc_building` -- a building line on a
+    lot with no building. Under the flat rate that function models this is harmless (the two lines
+    sum to the same total, so the bill is identical, which is the sense in which its docstring says
+    vacant parcels never move). Stacking a split rate on top is what makes it bite: measured on
+    TY2026, 14,831 of 30,564 taxable vacant lots would have a phantom $0.82B taxed at the building
+    rate, and the other half would have their under-assessment frozen in place.
+
+    So the cap is lifted exactly where there is no improvement to hold a total fixed against. For a
+    bare lot "hold the total fixed" and "value the land at what it sells for" are the same
+    instruction, and a total that disagrees with the sales evidence is an assessment error, not a
+    constraint. Nothing with a building on it is touched, and no building is ever revalued.
+
+    The parcel's own exemption is carried in dollars (144 bare parcels have one, nearly all partial
+    institutional relief, which is relief against total value and so does not follow the split).
+
+    `alloc` is the reallocation of `frame` on `new_land_col`; `taxable` marks the parcels that pay
+    tax at all. Returns the taxable land and building lines with bare lots re-valued, and the
+    bare-lot mask. The one-pager and the abatement phase-in both use this, so the two describe one
+    reform.
+    """
+    land = alloc.alloc_taxable_land.to_numpy().copy()
+    building = alloc.alloc_taxable_building.to_numpy().copy()
+    gross_total = (frame.taxable_land + frame.exempt_land + frame.taxable_building + frame.exempt_building).to_numpy()
+    bare = taxable & ((frame.taxable_building + frame.exempt_building).to_numpy() <= 1.0)
+    exempt_dollars = (gross_total - alloc.reconstructed_taxable_total.to_numpy()).clip(min=0)
+    land[bare] = (frame[new_land_col].to_numpy()[bare] - exempt_dollars[bare]).clip(min=0)
+    building[bare] = 0.0
+    return land, building, bare
 
 
 # --- Commercial property: building type and zoning family -------------------------------------
