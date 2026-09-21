@@ -1,7 +1,9 @@
 # Right-to-Know Law requests
 
 Drafted 2026-09-21 for the Scranton split-rate repeal analysis (`analysis/scranton_repeal/`).
-Request 1 was sent 2026-09-21 (see `rtk_tracker.csv` for status). Request 2 has not been sent.
+Both requests were sent 2026-09-21 (see `rtk_tracker.csv` for status). Request 2 as sent asks only
+for the 2025 and 2026 tax duplicates, with any exclusion or abatement applied as a field; its
+items 2 and 3 below were dropped.
 The 2025 side is already covered by public data: pre-reassessment
 land and building values from the County's public GIS layer (`GISViewer/LandRecords/MapServer/85`)
 reproduce the 2025 City levy stated in the 2026 rate ordinance (File of the Council No. 107,
