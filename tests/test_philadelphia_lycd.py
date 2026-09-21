@@ -899,3 +899,16 @@ def test_uncap_bare_land_carries_opa_on_a_bare_lot_beyond_the_support_edge():
         uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="opa_relevelled")
     with pytest.raises(ValueError, match="large_tracts must be one of"):
         uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="keep")
+
+
+def test_paint_surface_does_not_carry_a_vacant_coded_parcel_opa_values_as_a_building():
+    """A vacant-coded lot beyond the edge that OPA books mostly to a building line (a parking lot
+    with a booth, parkland) keeps its surface land, capped at its total, like any improved parcel."""
+    gdf, surface = _supported_city()
+    b_vac = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("6")].index[0]
+    gdf.loc[b_vac, "dor_area_sqft"] = 5_000_000.0
+    gdf.loc[b_vac, "opa_gross_land"] = 1_000.0              # market value 5,000: the rest is "building"
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3, support=SUPPORT)
+    assert res.beyond_support[b_vac]
+    assert res.source[b_vac] == "knn"
+    assert res.diagnostics["n_carried_at_opa"] == 0

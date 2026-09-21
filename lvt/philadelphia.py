@@ -798,8 +798,8 @@ def paint_land_surface(
     cannot speak to. (1) The KNN fill re-sizes each neighbour's rate to the subject's own lot
     (`_knn_resized_rate_fill`) and draws only on neighbours inside the support edge. (2) Every
     parcel whose own lot, or whose painted lot, exceeds the edge is flagged `beyond_support`.
-    (3) A flagged VACANT parcel is carried at `carry_col` (OPA's own gross land value) and
-    marked `source == 'opa_beyond_support'`: an improved parcel's land is capped at its total,
+    (3) A flagged VACANT parcel whose OPA land value is its whole market value is carried at
+    `carry_col` (OPA's own gross land value) and marked `source == 'opa_beyond_support'`: an improved parcel's land is capped at its total,
     so an extrapolated rate cannot add value to the base, but a vacant lot is taken whole and
     nothing bounds it (audit 2026-09-21, finding 3). Without
     `support` the function behaves exactly as before, for surfaces that publish no edge.
@@ -851,10 +851,15 @@ def paint_land_surface(
     is_vac = cat.isin(set(str(c) for c in vacant_codes))
 
     land = (psf_filled * area).clip(lower=0).fillna(0.0)
-    carried = beyond & is_vac
+    # Bare by OPA's own split too, not by the category code alone: OPA books most of the value
+    # of many vacant-coded parcels (parking lots, parkland) to a building line, and carrying its
+    # land figure alone would strip that value out of land. Those have a total to cap against.
+    opa_land = pd.to_numeric(gdf[carry_col], errors="coerce") if support else None
+    carried = (beyond & is_vac & opa_land.notna() & (market.fillna(0).clip(lower=0) - opa_land.fillna(0)).le(1.0)
+               if support else beyond & is_vac)
     surface_value_on_carried = float(land[carried].sum())
     if carried.any():
-        land = land.where(~carried, pd.to_numeric(gdf[carry_col], errors="coerce").fillna(0.0).clip(lower=0))
+        land = land.where(~carried, opa_land.fillna(0.0).clip(lower=0))
         source = source.where(~carried, "opa_beyond_support")
     pre_cap = float(land.sum())
     mv = market.fillna(0).clip(lower=0)
