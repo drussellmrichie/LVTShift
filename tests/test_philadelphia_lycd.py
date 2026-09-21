@@ -762,3 +762,84 @@ def test_paint_surface_cap_binds_on_improved_only():
     off = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3, cap_improved_at_market=False)
     assert off.diagnostics["n_capped"] == 0
     assert off.land_value[a_imp] == pytest.approx(1_000.0 * 1_000.0)
+
+
+# --- paint_land_surface with a published support edge ---------------------------------------
+# The surface says where its sales stop testing it (philly_open_avmkit's
+# land_surface_support.json). Beyond that edge a rate is an extrapolation: a filled parcel's
+# rate is re-sized to its own lot, and a vacant lot -- the one case nothing caps -- keeps OPA's
+# value (audit 2026-09-21, finding 3).
+SUPPORT = {"edge_sqft": 10_000.0, "size_elasticity": -0.5,
+           "area_column": "painted_area_sqft", "flag_column": "beyond_support"}
+
+
+def _supported_city():
+    gdf, surface = _painted_city()
+    gdf["opa_gross_land"] = np.where(gdf["category_code"].eq("6"), gdf["market_value"], 0.2 * gdf["market_value"])
+    area = gdf.set_index(gdf["parcel_number"].str.lstrip("0"))["dor_area_sqft"]
+    surface["painted_area_sqft"] = surface["parcel_number"].map(area).to_numpy()
+    surface["beyond_support"] = False
+    return gdf, surface
+
+
+def test_paint_surface_without_support_is_unchanged_by_the_new_columns():
+    gdf, surface = _supported_city()
+    before = paint_land_surface(gdf, surface[["parcel_number", "s2_k20"]], rate_col="s2_k20", knn_k=3)
+    same = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3)
+    assert before.land_value.equals(same.land_value)
+    assert not same.beyond_support.any()
+    assert same.diagnostics["n_carried_at_opa"] == 0
+
+
+def test_paint_surface_fill_resizes_the_neighbours_rate_to_the_subjects_own_lot():
+    gdf, surface = _supported_city()
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3, support=SUPPORT)
+    # Zone B's vacant lot is 500 sqft and unmatched; every donor is a 1,000 sqft zone-A lot at
+    # $7.50. Re-sized to the subject: 7.5 x (500/1000) ** -0.5.
+    b_vac = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("6")].index[0]
+    assert res.source[b_vac] == "knn"
+    assert res.psf[b_vac] == pytest.approx(7.5 * 0.5 ** -0.5)
+    assert res.land_value[b_vac] == pytest.approx(7.5 * 0.5 ** -0.5 * 500.0)
+    # A same-sized unmatched neighbour is not re-sized at all.
+    b_imp = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("1") & gdf["dor_area_sqft"].eq(1000.0)].index[0]
+    assert res.psf[b_imp] == pytest.approx(7.5)
+
+
+def test_paint_surface_carries_a_vacant_tract_beyond_the_edge_at_opa():
+    gdf, surface = _supported_city()
+    b_vac = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("6")].index[0]
+    b_imp = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("1")].index[0]
+    gdf.loc[[b_vac, b_imp], "dor_area_sqft"] = 5_000_000.0        # two 115-acre parcels
+    gdf.loc[b_imp, "market_value"] = 3_000_000.0
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3, support=SUPPORT)
+    assert res.beyond_support[b_vac] and res.beyond_support[b_imp]
+    # The vacant one keeps OPA's value, not rate x 5M sqft, and says so.
+    assert res.source[b_vac] == "opa_beyond_support"
+    assert res.land_value[b_vac] == pytest.approx(gdf.loc[b_vac, "opa_gross_land"])
+    # The improved one keeps its painted land, which the cap bounds at its total.
+    assert res.source[b_imp] == "knn"
+    assert res.land_value[b_imp] == pytest.approx(min(res.psf[b_imp] * 5_000_000.0, 3_000_000.0))
+    d = res.diagnostics
+    assert d["n_carried_at_opa"] == 1 and d["carried_value"] == pytest.approx(gdf.loc[b_vac, "opa_gross_land"])
+    assert d["surface_value_on_carried"] == pytest.approx(res.psf[b_vac] * 5_000_000.0)
+
+
+def test_paint_surface_honours_the_surfaces_own_flag_and_skips_flagged_donors():
+    gdf, surface = _supported_city()
+    # Flag every donor but one, and give that one a distinctive rate: the fill must use it alone.
+    surface["beyond_support"] = True
+    keep = surface.index[5]
+    surface.loc[keep, ["beyond_support", "s2_k20"]] = [False, 3.0]
+    res = paint_land_surface(gdf, surface, rate_col="s2_k20", knn_k=3, support=SUPPORT)
+    b_imp = gdf[gdf["zone"].eq("B") & gdf["category_code"].eq("1") & gdf["dor_area_sqft"].eq(1000.0)].index[0]
+    assert res.psf[b_imp] == pytest.approx(3.0)
+    # A matched vacant lot the SURFACE flags is carried even though its own lot is small.
+    a_vac = gdf[gdf["zone"].eq("A") & gdf["category_code"].eq("6")].index[0]
+    assert res.source[a_vac] == "opa_beyond_support"
+    assert res.land_value[a_vac] == pytest.approx(gdf.loc[a_vac, "opa_gross_land"])
+
+
+def test_paint_surface_with_support_requires_the_surfaces_columns():
+    gdf, surface = _supported_city()
+    with pytest.raises(KeyError):
+        paint_land_surface(gdf, surface[["parcel_number", "s2_k20"]], rate_col="s2_k20", support=SUPPORT)

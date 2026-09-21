@@ -398,6 +398,41 @@ def _knn_median_fill(coords: "np.ndarray", values: "np.ndarray", k: int) -> "np.
     return filled
 
 
+def _knn_resized_rate_fill(coords, rates, painted_area, own_area, donor_ok, elasticity: float,
+                           k: int) -> "np.ndarray":
+    """Fill NaN `rates` from the `k` nearest donors, each donor's rate first re-sized from the
+    lot it was painted at to the SUBJECT's own lot: `r_j * (A_i / a_j) ** elasticity`.
+
+    A size-sensitive surface paints every parcel at its own lot size, so a neighbour's rate is
+    a statement about a lot the neighbour's size. Handing it unchanged to a subject two
+    hundred times larger prices a rail yard at a rowhouse lot's rate (audit 2026-09-21,
+    finding 3). The surface's adjustment is multiplicative in area, so re-sizing a donor's rate
+    is exact for the comparable grid that produced it. Donors are restricted to `donor_ok`
+    (parcels the surface's own evidence supports); a subject with no usable area of its own
+    takes the donors' median unre-sized, as `_knn_median_fill` would.
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
+
+    rates = np.asarray(rates, dtype=float)
+    a_don = np.asarray(painted_area, dtype=float)
+    a_own = np.asarray(own_area, dtype=float)
+    need = np.isnan(rates)
+    have = ~need & np.asarray(donor_ok, dtype=bool) & (a_don > 0)
+    if need.sum() == 0 or have.sum() == 0:
+        return rates
+    tree = cKDTree(coords[have])
+    _, ix = tree.query(coords[need], k=min(k, int(have.sum())), workers=-1)
+    if ix.ndim == 1:
+        ix = ix[:, None]
+    own = a_own[need]
+    own = np.where(np.isfinite(own) & (own > 0), own, np.nan)[:, None]
+    scale = np.where(np.isnan(own), 1.0, (own / a_don[have][ix]) ** elasticity)
+    filled = rates.copy()
+    filled[need] = np.median(rates[have][ix] * scale, axis=1)
+    return filled
+
+
 @dataclass(frozen=True)
 class LycdResult:
     """Output of `compute_lycd_land_values`: the frame with LYCD columns, plus diagnostics."""
@@ -695,7 +730,9 @@ class LandSurfaceResult:
     psf: "pd.Series"            # $/sqft actually used, after the KNN fill
     land_value: "pd.Series"     # psf x LVTShift's own lot area, improved parcels capped
     source: "pd.Series"         # 'surface' (joined) | 'knn' (filled from matched neighbours)
+                                #   | 'opa_beyond_support' (a vacant lot past the support edge)
     diagnostics: dict
+    beyond_support: "pd.Series | None" = None   # lot larger than the surface's sales can test
 
     def describe(self) -> str:
         d = self.diagnostics
@@ -707,6 +744,10 @@ class LandSurfaceResult:
             f"${d['land_base_pre_cap']/1e9:.2f}B -> ${d['land_base_post_cap']/1e9:.2f}B "
             f"({d['cap_removed_share']:.1%} removed) | "
             f"land > total on {d['n_land_exceeds_total']:,} improved parcels before the cap"
+            + ("" if not d.get("support_edge_sqft") else
+               f" | beyond the {d['support_edge_sqft']:,.0f} sqft support edge: {d['n_beyond_support']:,} parcels, "
+               f"{d['n_carried_at_opa']:,} vacant ones carried at OPA (${d['carried_value']/1e9:.2f}B, "
+               f"against ${d['surface_value_on_carried']/1e9:.2f}B painted)")
         )
 
 
@@ -721,6 +762,8 @@ def paint_land_surface(
     cap_improved_at_market: bool = True,
     vacant_codes=VACANT_CATEGORY_CODES,
     label: "str | None" = None,
+    support: "dict | None" = None,
+    carry_col: str = "opa_gross_land",
 ) -> LandSurfaceResult:
     """Paint an externally estimated land $/sqft surface onto LVTShift's parcel frame.
 
@@ -747,11 +790,25 @@ def paint_land_surface(
     assessment before the cap binds: under the draft ordinance's Sec. 3(c) that is not a
     permitted assessment, so it is a finding about the totals, and the report needs the count.
 
+    `support` is the surface's own statement of where its evidence ends: the parsed
+    `land_surface_support.json` that `run_land_surfaces.py` writes beside the surface
+    (`edge_sqft`, `size_elasticity`, and the names of the surface's painted-area and
+    beyond-support columns). With it, three things change, all of them about lots the sales
+    cannot speak to. (1) The KNN fill re-sizes each neighbour's rate to the subject's own lot
+    (`_knn_resized_rate_fill`) and draws only on neighbours inside the support edge. (2) Every
+    parcel whose own lot, or whose painted lot, exceeds the edge is flagged `beyond_support`.
+    (3) A flagged VACANT parcel is carried at `carry_col` (OPA's own gross land value) and
+    marked `source == 'opa_beyond_support'`: an improved parcel's land is capped at its total,
+    so an extrapolated rate cannot add value to the base, but a vacant lot is taken whole and
+    nothing bounds it (audit 2026-09-21, finding 3). Without
+    `support` the function behaves exactly as before, for surfaces that publish no edge.
+
     Parameters
     ----------
     gdf : GeoDataFrame
         Needs `parcel_col`, `category_code`, `market_value`, `area_col` (run
-        `compute_lycd_land_values` first) and point geometry.
+        `compute_lycd_land_values` first) and point geometry; `carry_col` when `support` is
+        given.
     surface : DataFrame
         `parcel_col` (any zero-padding; normalised to 9 digits) and `rate_col` in $/sqft.
     rate_col : str
@@ -764,23 +821,40 @@ def paint_land_surface(
     out_index = gdf.index
     keys = gdf[parcel_col].astype(str).str.strip().str.zfill(9)
 
-    s = surface[[parcel_col, rate_col]].copy()
+    # Indexed strictly: a surface said to publish a support edge must carry its columns.
+    extra = [support["area_column"], support["flag_column"]] if support else []
+    s = surface[[parcel_col, rate_col, *extra]].copy()
     s[parcel_col] = s[parcel_col].astype(str).str.strip().str.zfill(9)
     s[rate_col] = pd.to_numeric(s[rate_col], errors="coerce")
-    s = s.dropna(subset=[rate_col]).drop_duplicates(parcel_col).set_index(parcel_col)[rate_col]
+    s = s.dropna(subset=[rate_col]).drop_duplicates(parcel_col).set_index(parcel_col)
 
-    psf = pd.Series(keys.map(s).to_numpy(dtype=float), index=out_index)
+    psf = pd.Series(keys.map(s[rate_col]).to_numpy(dtype=float), index=out_index)
     matched = psf.notna()
     coords = _parcel_coords(gdf)
-    psf_filled = pd.Series(_knn_median_fill(coords, psf.to_numpy(), knn_k), index=out_index)
+    area = pd.to_numeric(gdf[area_col], errors="coerce")
+    if support:
+        edge = float(support["edge_sqft"])
+        painted_area = pd.to_numeric(keys.map(s[support["area_column"]]), errors="coerce").to_numpy(float)
+        flagged = keys.map(s[support["flag_column"]].astype(str).str.lower().eq("true")).eq(True).to_numpy()
+        psf_filled = pd.Series(_knn_resized_rate_fill(
+            coords, psf.to_numpy(), painted_area, area.to_numpy(float), ~flagged,
+            float(support["size_elasticity"]), knn_k), index=out_index)
+        beyond = pd.Series(flagged | (area.fillna(0).to_numpy(float) > edge), index=out_index)
+    else:
+        psf_filled = pd.Series(_knn_median_fill(coords, psf.to_numpy(), knn_k), index=out_index)
+        beyond = pd.Series(False, index=out_index)
     source = pd.Series(np.where(matched, "surface", "knn"), index=out_index)
 
-    area = pd.to_numeric(gdf[area_col], errors="coerce")
     market = pd.to_numeric(gdf["market_value"], errors="coerce")
     cat = pd.to_numeric(gdf["category_code"].astype(str).str.strip(), errors="coerce").astype("Int64").astype(str)
     is_vac = cat.isin(set(str(c) for c in vacant_codes))
 
     land = (psf_filled * area).clip(lower=0).fillna(0.0)
+    carried = beyond & is_vac
+    surface_value_on_carried = float(land[carried].sum())
+    if carried.any():
+        land = land.where(~carried, pd.to_numeric(gdf[carry_col], errors="coerce").fillna(0.0).clip(lower=0))
+        source = source.where(~carried, "opa_beyond_support")
     pre_cap = float(land.sum())
     mv = market.fillna(0).clip(lower=0)
     exceeds = (land > mv) & ~is_vac & (mv > 0)
@@ -807,8 +881,13 @@ def paint_land_surface(
         "cap_removed_share": (pre_cap - post_cap) / pre_cap if pre_cap > 0 else float("nan"),
         "median_psf_matched": float(psf[matched].median()) if matched.any() else float("nan"),
         "median_psf_knn": float(psf_filled[~matched].median()) if (~matched).any() else float("nan"),
+        "support_edge_sqft": float(support["edge_sqft"]) if support else None,
+        "n_beyond_support": int(beyond.sum()),
+        "n_carried_at_opa": int(carried.sum()),
+        "carried_value": float(land[carried].sum()),
+        "surface_value_on_carried": surface_value_on_carried,
     }
-    return LandSurfaceResult(psf_filled, land, source, diagnostics)
+    return LandSurfaceResult(psf_filled, land, source, diagnostics, beyond)
 
 
 @dataclass(frozen=True)
