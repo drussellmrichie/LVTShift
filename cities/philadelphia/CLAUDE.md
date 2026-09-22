@@ -34,7 +34,7 @@ Philadelphia parcel data comes from the **OPA (Office of Property Assessment)** 
 
 **LOOP and Senior Freeze are NOT in OPA.** Philadelphia's Longtime Owner Occupant Program (LOOP) and Senior Citizen Tax Freeze are administered by Revenue, not OPA, and are not available as public parcel-level datasets. They contribute a small portion of the revenue gap (~1–3%), with assessment vintage mismatch being the dominant factor.
 
-**OPA land/building split:** ~45% of improved parcels have a land ratio of exactly 0.200 (OPA's default formula). Multi-family and commercial are especially affected. This attenuates split-rate impact. Document this limitation in the notebook.
+**OPA land/building split:** a large majority of improved parcels sit at a land ratio of exactly 0.200 (OPA's default formula), measured on FULL value (`taxable + exempt`). Measured on the taxable columns the share reads roughly half that, because the Homestead Exemption comes off the building line and drags a homesteaded parcel's taxable land share off 0.200 even though OPA assigned it 0.200 — always measure the split on full value. The default is least common on commercial, industrial and the top value decile. This attenuates split-rate impact. Document this limitation in the notebook. Measurement: `analysis/opa_split_equity/01_land_ratio_audit.py`.
 
 **Philadelphia category classification uses four stacked overrides** (in order):
 1. `taxable_building <= 0` → "Vacant Land" (catch-all for zero-improvement parcels)
