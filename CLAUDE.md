@@ -299,6 +299,9 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 ## Data Files
 
 All data files (.csv, .xlsx, .parquet, .gpq, .geojson, .shp) are gitignored. Each city's scraped data is cached locally in `cities/<city>/data/`; notebooks auto-detect cached files and skip re-scraping when a recent file exists. Standard exports land in `analysis/data/` and reports in `analysis/reports/` (both gitignored). The `data_scrape` flag in notebooks controls whether to fetch fresh data or load from cached files.
+The `*.csv` rule applies everywhere, so a hand-sourced *input* to an analysis script (budget
+figures, rates) saved as a CSV silently never reaches git; keep such inputs in the script with a
+source comment per value (e.g. `REVENUES` in `analysis/howard_tax_swap/swap_scenarios.py`).
 
 ## Batch Execution
 
