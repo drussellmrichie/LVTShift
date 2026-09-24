@@ -851,6 +851,118 @@ def condo_unit_areas(
 
 
 @dataclass(frozen=True)
+class LotAreaCorrectionResult:
+    """Output of `corrected_lot_areas`. Series aligned to the input frame's index."""
+    area: "pd.Series"       # lot area, implausible OPA records replaced by the sibling repo's
+    source: "pd.Series"     # the input area source, or `corrected_label`
+    diagnostics: dict
+
+    def describe(self) -> str:
+        d = self.diagnostics
+        return (
+            f"recorded lot areas: {d['n_corrected']:,} OPA records replaced by the sibling repo's "
+            f"polygon area ({d['n_flagged_in_roll']:,} flagged there, {d['n_flagged_matched']:,} "
+            f"on this frame, {d['n_kept_own_source']:,} already on another source here) | "
+            f"their area {d['area_before_sqft']/1e6:,.1f}M -> {d['area_after_sqft']/1e6:,.1f}M sqft"
+        )
+
+
+def corrected_lot_areas(
+    gdf,
+    roll,
+    *,
+    area_col: str = "dor_area_sqft",
+    source_col: str = "area_source",
+    parcel_col: str = "parcel_number",
+    flag_value: str = "pwd_dor",
+    replace_sources=("opa_total_area",),
+    corrected_label: str = "pwd_dor",
+    max_residual_ratio: float = 2.0,
+) -> LotAreaCorrectionResult:
+    """Replace OPA lot areas the sibling repo has found implausible with its polygon area.
+
+    `compute_lycd_land_values` takes OPA's `total_area` first and lets a surveyed polygon
+    override it only when OPA is more than 3x the parcel's own PIN polygon. `philly_open_avmkit`
+    applies a tighter rule with a second witness: an OPA area more than 2x both the DOR polygon
+    and PWD's polygon for the same account is replaced (`land_area_source == 'pwd_dor'` on its
+    land roll, the area it used in `land_area_sqft`). Its surfaces are fitted and painted on the
+    corrected areas, so a replaced lot carries a rate for its true size; multiplied by an OPA
+    area still 2-3x too large (or by a polygon borrowed from a neighbouring pin), that rate
+    overstates land. LVTShift has no PWD polygons, so it cannot apply the rule itself.
+
+    This imports the correction for exactly the flagged parcels, and only where this repo's
+    chain still uses the value the rule rejected (`replace_sources`, OPA's recorded area).
+    Parcels already on another source keep it: a `pin_override` row is this repo's own polygon,
+    and a condo unit's `condo_share` is a share of its building's lot, not the lot. Both repos
+    measure true ground square feet, as `condo_unit_areas` relies on for its master-lot fallback.
+
+    The guard reads the quantity the defect inflated: after the correction, no flagged parcel
+    may keep an area more than `max_residual_ratio` times the sibling repo's, whatever its source.
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `parcel_col`, `area_col` and `source_col` (run `compute_lycd_land_values` first,
+        and `condo_unit_areas` before this, so condo units are already on their share).
+    roll : DataFrame
+        `philly_open_avmkit`'s `out/land/land_roll_ty<YEAR>.csv` columns `parcel_number`,
+        `land_area_sqft` and `land_area_source`.
+
+    Returns
+    -------
+    LotAreaCorrectionResult
+        `.area` and `.source` replace `area_col` and `source_col`; unflagged parcels are unchanged.
+    """
+    import numpy as np
+    import pandas as pd
+
+    missing = {"parcel_number", "land_area_sqft", "land_area_source"} - set(roll.columns)
+    if missing:
+        raise ValueError(f"the land roll lacks {sorted(missing)}: it predates the sibling repo's "
+                         "lot-area rule. Rebuild it with build_land_roll.py")
+    r = roll[roll["land_area_source"].astype(str).eq(flag_value)].copy()
+    r["key"] = r["parcel_number"].astype(str).str.strip().str.zfill(9)
+    r["sibling_area"] = pd.to_numeric(r["land_area_sqft"], errors="coerce")
+    r = r[r["sibling_area"] > 0].drop_duplicates("key").set_index("key")["sibling_area"]
+
+    keys = gdf[parcel_col].astype(str).str.strip().str.zfill(9)
+    area = pd.to_numeric(gdf[area_col], errors="coerce").astype(float).copy()
+    source = gdf[source_col].astype(object).copy()
+    sibling = pd.Series(keys.map(r).to_numpy(float), index=gdf.index)
+    flagged = sibling.notna()
+    fix = flagged & source.isin(list(replace_sources))
+
+    # A correction shrinks an inflated record. One that grows it means the keys or the two
+    # repos' area conventions have come apart, and nothing downstream would notice.
+    grows = fix & (sibling > area)
+    if grows.any():
+        raise ValueError(f"{int(grows.sum()):,} flagged lots would GROW under the sibling repo's area; "
+                         "the correction is meant to replace inflated OPA records")
+
+    before = float(area[fix].sum())
+    area[fix] = sibling[fix]
+    source[fix] = corrected_label
+
+    residual = flagged & (area > max_residual_ratio * sibling)
+    if residual.any():
+        by = source[residual].value_counts().to_dict()
+        raise ValueError(f"{int(residual.sum()):,} flagged lots still exceed {max_residual_ratio:g}x the "
+                         f"sibling repo's area after the correction (sources: {by}); add their source "
+                         "to replace_sources or explain why it is right")
+
+    diagnostics = {
+        "n_flagged_in_roll": int(len(r)),
+        "n_flagged_matched": int(flagged.sum()),
+        "n_corrected": int(fix.sum()),
+        "n_kept_own_source": int((flagged & ~fix).sum()),
+        "kept_source_counts": source[flagged & ~fix].value_counts().to_dict(),
+        "area_before_sqft": before,
+        "area_after_sqft": float(area[fix].sum()),
+    }
+    return LotAreaCorrectionResult(area, source, diagnostics)
+
+
+@dataclass(frozen=True)
 class LandSurfaceResult:
     """Output of `paint_land_surface`. Series aligned to the input frame's index."""
     psf: "pd.Series"            # $/sqft actually used, after the KNN fill
