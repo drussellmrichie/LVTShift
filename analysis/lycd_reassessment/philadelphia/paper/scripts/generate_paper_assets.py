@@ -319,19 +319,28 @@ def sales_section(df, s, H):
     # Sec. 3(c) on the sales-based surface: how often does land ALONE exceed OPA's total
     # assessment before the cap binds? Measured on the pre-cap value (rate x area), since the
     # exported land value is already capped. Split out the cohort whose lot area is itself
-    # imputed (condominium units and other records with no lot of their own, which inherit a
-    # neighbour's whole-lot area): their overshoot is the known area artifact, not evidence
-    # about OPA's totals.
+    # imputed -- records with no lot of their own in the parcel file, which inherit a
+    # neighbour's area by KNN: their overshoot is an area artifact, not evidence about OPA's
+    # totals. Condominium units are not in it: on a painted surface `condo_unit_areas` gives
+    # each unit its livable-area share of the building's lot (`condo_share` / `condo_accessory`),
+    # so they are counted with the rest. The prose says so; refuse an export built before that
+    # step, whose `knn` cohort still holds the condo units at the whole lot.
+    condo_units = imp["area_source"].isin(["condo_share", "condo_accessory"])
+    assert condo_units.any(), (
+        f"{SALES_SLUG}.csv has no condo_share/condo_accessory area_source: it predates "
+        "condo_unit_areas. Re-run model_lycd_reassessment.ipynb with "
+        f"LVT_LAND_SURFACE={SALES_SURFACE}")
     imp["pre_cap"] = imp["land_surface_psf"] * imp["dor_area_sqft"]
     over = imp["pre_cap"] > imp["market_value"]
-    condo_like = imp["area_source"].eq("knn")
+    imputed = imp["area_source"].eq("knn")
     H.add("SfivePreCapExceeds", int(over.sum()), num)
-    H.add("SfivePreCapExceedsCondo", int((over & condo_like).sum()), num)
-    H.add("SfivePreCapExceedsCore", int((over & ~condo_like).sum()), num)
-    H.add("SfivePreCapExceedsCorePct", 100 * (over & ~condo_like).sum() / (~condo_like).sum(), pct)
+    H.add("SfivePreCapExceedsImputed", int((over & imputed).sum()), num)
+    H.add("SfivePreCapExceedsCondo", int((over & condo_units).sum()), num)
+    H.add("SfivePreCapExceedsCore", int((over & ~imputed).sum()), num)
+    H.add("SfivePreCapExceedsCorePct", 100 * (over & ~imputed).sum() / (~imputed).sum(), pct)
     H.add("SfiveCapRemovedB", (imp.loc[over, "pre_cap"] - imp.loc[over, "market_value"]).sum() / 1e9, usd_b)
     H.add("SfiveCapRemovedCoreB",
-          (imp.loc[over & ~condo_like, "pre_cap"] - imp.loc[over & ~condo_like, "market_value"]).sum() / 1e9, usd_b)
+          (imp.loc[over & ~imputed, "pre_cap"] - imp.loc[over & ~imputed, "market_value"]).sum() / 1e9, usd_b)
     H.add("SfiveKnnFillPsf", ex.loc[knn, "land_surface_psf"].median(), lambda x: f"${x:,.0f}")
     H.add("SfiveJoinedPsf", ex.loc[ex["land_surface_source"].eq("surface"), "land_surface_psf"].median(),
           lambda x: f"${x:,.0f}")
@@ -533,8 +542,8 @@ def scenario_a(df, H):
 # --------------------------------------------------------------------------- #
 # The ordinance's own tests (Sec. 3(b) uniformity, Sec. 3(e), Sec. 4)
 # --------------------------------------------------------------------------- #
-def land_psf(df, col):
-    a = df["dor_area_sqft"].replace(0, np.nan)
+def land_psf(df, col, area_col="dor_area_sqft"):
+    a = df[area_col].replace(0, np.nan)
     return df[col] / a
 
 
@@ -554,11 +563,15 @@ def uniformity_tests(df, H):
     # exactly where it matters for Sec. 3(b): a vacant parcel's re-split land is capped at its
     # own total, i.e. OPA's own vacant value, so the raw method's vacant leg never reaches the roll.
     SURFACES = [("OPA", "opa_gross_land"), ("LYCD", "lycd_land_value"), ("Resplit", "alloc_land")]
-    # The sales-based surface, when its run exists (merged onto df in main()).
+    # The sales-based surface, when its run exists (merged onto df in main()). Its rate is per
+    # square foot of ITS run's lot area, which differs from this export's for condominium units
+    # (their share of the building's lot, not the whole lot), so it is divided by that area.
+    area_of = {}
     if "sales_land" in d.columns:
         SURFACES += [("Sfive", "sales_land"), ("SfiveResplit", "sales_alloc_land")]
+        area_of = {"Sfive": "sales_area", "SfiveResplit": "sales_area"}
     for name, col in SURFACES:
-        d[f"psf_{name}"] = land_psf(d, col)
+        d[f"psf_{name}"] = land_psf(d, col, area_of.get(name, "dor_area_sqft"))
 
     rows = []
     # (1) vacant vs improved land rate, within zone. The ordinance names this exact contrast.
@@ -1113,8 +1126,9 @@ def main():
     H = Headlines(prefix=PREFIX, out_path=TABLES / "headlines.tex")
     sales = load_sales()
     if sales is not None:
-        cols = sales["export"][["parcel_id", "lycd_land_value", "alloc_land"]].rename(
-            columns={"lycd_land_value": "sales_land", "alloc_land": "sales_alloc_land"})
+        cols = sales["export"][["parcel_id", "lycd_land_value", "alloc_land", "dor_area_sqft"]].rename(
+            columns={"lycd_land_value": "sales_land", "alloc_land": "sales_alloc_land",
+                     "dor_area_sqft": "sales_area"})
         df = df.merge(cols, on="parcel_id", how="left")
     eq = load_equity()
 

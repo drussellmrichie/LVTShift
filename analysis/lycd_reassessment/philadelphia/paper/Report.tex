@@ -647,7 +647,8 @@ Table~\ref{tab:h2h} measured.
 
 \subsection{What it does to the roll}
 
-Painted onto every parcel --- the rate imported, this notebook's own lot area applied --- the
+Painted onto every parcel --- the rate imported, this notebook's own lot area applied, and a
+condominium unit given its livable-area share of its building's lot --- the
 paired-sales surface puts \LycdSfiveLandBaseB{} of land on the roll, against
 \LycdLycdLandBaseB{} for the zone-rate allocation and \LycdOpaLandBaseB{} for OPA:
 \LycdSfiveOverOpaLand{} the assessor's land, \LycdSfiveOverLycdLand{} the allocation's. Where it
@@ -662,11 +663,13 @@ built on; they take the median rate of their nearest matched neighbours, at a me
 \LycdSfiveKnnFillPsf{} a square foot against \LycdSfiveJoinedPsf{} for joined parcels. Second,
 the improved-parcel cap binds hard: before it, the surface's land \emph{alone} exceeds OPA's
 total assessment on \LycdSfivePreCapExceeds{} improved parcels, by \LycdSfiveCapRemovedB{} in
-aggregate. \LycdSfivePreCapExceedsCondo{} of those are the known lot-area artifact (a
-condominium unit inheriting a whole lot's area); the remaining \LycdSfivePreCapExceedsCore{}
-(\LycdSfivePreCapExceedsCorePct{} of improved parcels with a lot of their own,
-\LycdSfiveCapRemovedCoreB{}) are parcels whose land, at what nearby land sells for, is worth
-more than OPA says the whole property is. Under Section~3(c) that is a finding about the
+aggregate. \LycdSfivePreCapExceedsImputed{} of those are records with no lot of their own in
+the parcel file, whose area is borrowed from a neighbour and so says nothing about the
+property. The remaining \LycdSfivePreCapExceedsCore{} (\LycdSfivePreCapExceedsCorePct{} of
+improved parcels whose lot area is not imputed, \LycdSfiveCapRemovedCoreB{}; among them
+\LycdSfivePreCapExceedsCondo{} condominium units, priced on their share of the building's lot)
+are parcels whose land, at what nearby land sells for, is worth more than OPA says the whole
+property is. Under Section~3(c) that is a finding about the
 totals, and it is the first concrete estimate of how many of them a sales-based land standard
 would put under pressure. Third, on the uniformity tests (Table~\ref{tab:uniformity}, last two
 columns) the raw sales surface passes the sentence OPA and the allocation fail between them:
@@ -914,8 +917,9 @@ component, and a rate table is a convenience derived from it.
   as a separate market.
 \item \textbf{\LycdSfiveKnnValuePct{} of market value is painted by nearest neighbour, and
   the cap removes \LycdSfiveCapRemovedB{}.} Neither is a property of the surface. The first is
-  the AVM universe's coverage; the second is the lot-area artifact on condominium units plus
-  \LycdSfivePreCapExceedsCore{} parcels whose totals the sales say are too low. Both are
+  the AVM universe's coverage; the second is \LycdSfivePreCapExceedsCore{} parcels whose totals
+  the sales say are too low, plus \LycdSfivePreCapExceedsImputed{} records whose lot area is
+  borrowed from a neighbour. Both are
   reported rather than fixed here, and both bound what can be claimed about the surface's
   effect on the roll.
 \item \textbf{The land-tax comparison is by neighbourhood, not by household.}
