@@ -41,6 +41,7 @@ ALL_CITIES = [
     "fort_collins",
     "greeley",
     "highlands_ranch",
+    "howard_county",
     "princeton",
     "pueblo",
     "rochester",
