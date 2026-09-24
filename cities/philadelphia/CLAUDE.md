@@ -388,6 +388,20 @@ SFR land base is slightly larger than this notebook's — a known simplification
 discrepancy. And the `knn` lot-area-source cohort (condo units and other records with no lot of
 their own) is a cap artifact, not a land-value finding; the notebook says so where it prints it.
 
+**Condo units on a painted surface.** OPA records a condo unit and DOR the building's lot, so the
+LYCD area chain gives a unit the whole lot (its own PIN when it anchors the building, a sibling's
+area by KNN, or OPA's `total_area` when that is the lot) or OPA's 1-sqft placeholder. Painted at
+a rate, every unit in a building then carries the building's whole land, capped at the unit's
+total -- which reads as a 100%-land unit and overstates its split-rate bill. On the painted path
+(Step 2b, any `LVT_LAND_SURFACE` but `lycd`) `condo_unit_areas` first replaces each unit's area
+with `philly_open_avmkit`'s `condo_unit_share` (livable-area share, summing to 1 per building;
+0 for accessory units) times this repo's own PIN area for the master lot, and marks it
+`area_source` `condo_share` / `condo_accessory`. It imports the share, not an area, for the
+same reason `paint_land_surface` imports a rate. Its guard is per building: the units' areas
+may not sum past the lot. The LYCD path keeps the old areas so Step 2's drift check against
+`model_lycd.ipynb` still holds; fixing it there means re-running that notebook and everything
+downstream of it.
+
 ## Philadelphia — Wage Tax Swap
 
 `cities/philadelphia/model_wage_tax_swap.ipynb` is a fifth Philadelphia notebook, but it doesn't
