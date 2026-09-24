@@ -36,7 +36,7 @@ the flag, from a phase-in run built at the same order:
 
 Outputs (analysis/political/philadelphia_council_one_pager/, gitignored):
     numbers.json         every figure the one-pager prints
-    gathered_light.png   print variant of the vacant + parking gathered-square map
+    gathered_light.png   print variant of the gathered-square map: taxable vacant land + surface parking
 """
 
 import argparse
@@ -66,7 +66,15 @@ CACHE_DIR = REPO_ROOT / "cities/philadelphia/data"
 OUT = REPO_ROOT / "analysis/political/philadelphia_council_one_pager"
 SURFACE_EXPORT = DATA / f"philadelphia_lycd_reassessment_ty{TAX_YEAR}_s5.csv"
 SURFACE_SUPPORT = DATA / f"philadelphia_lycd_reassessment_ty{TAX_YEAR}_s5_support.json"   # written with the export
-GATHERED_JSON = REPO_ROOT / "analysis/reports/philadelphia/vacant_parking_gathered.json"
+VACANT_LNI = CACHE_DIR / "vacant_land_lni.gpq"           # scripts/fetch_philly_vacant_parking.py
+SURFACE_PARKING = CACHE_DIR / "surface_parking_opa.gpq"  # same script: OPA 'PKG LOT' building codes
+PLACEHOLDER_OPA_IDS = {"000000000", "00000None"}         # L&I rows with no real OPA number
+SQFT_PER_ACRE = 43560.0
+# Census 2020 Gazetteer, place 4260000 (Philadelphia city): ALAND and AWATER in square miles.
+# https://www2.census.gov/geo/docs/maps-data/data/gazetteer/2020_Gazetteer/2020_gaz_place_42.txt
+PHILLY_LAND_SQMI = 134.356
+PHILLY_WATER_SQMI = 8.342
+CENTRAL_PARK_ACRES = 843.0
 OPA_ATTRIBUTES = REPO_ROOT / "analysis/ownership/philadelphia/opa_attributes.parquet"   # fetch_opa_attributes.py
 COUNCIL_DISTRICTS = CACHE_DIR / "council_districts.gpq"     # cached by scripts/map_philadelphia_tax_changes.py
 COUNCIL_DISTRICTS_SOURCE = "https://opendata.arcgis.com/datasets/9298c2f3fa3241fbb176ff1e84d33360_0.geojson"
@@ -678,15 +686,55 @@ def worked_example(g, category, full_exempt, land, building, current, millage, l
     )
 
 
-def render_map() -> None:
+def idle_land(g: pd.DataFrame, taxable: np.ndarray, current: np.ndarray, new: np.ndarray) -> dict:
+    """Vacant lots and surface parking that the tax can reach: L&I's vacant-land determinations plus
+    OPA's surface-parking codes, kept where the parcel is taxable on this tax year's roll.
+
+    Exempt land (City, Land Bank, Redevelopment and Housing Authority, SEPTA lots) is left out, since
+    a rate change cannot touch it. A parcel in both layers counts once, as parking. Areas are OPA
+    `total_area` from the roll, never a web-mercator Shape__Area.
+    """
+    def ids(path, col):
+        s = pd.read_parquet(path, columns=[col])[col].astype(str).str.strip().str.zfill(9)
+        return set(s[~s.isin(PLACEHOLDER_OPA_IDS)])
+
+    lni, parking = ids(VACANT_LNI, "opa_id"), ids(SURFACE_PARKING, "parcel_number")
+    parcel = g.parcel_number.astype(str).str.strip().str.zfill(9)
+    on_roll = set(parcel)
+    kind = pd.Series(np.select([parcel.isin(parking), parcel.isin(lni)], ["parking", "vacant"], ""), index=g.index)
+    area = g.total_area.fillna(0).to_numpy() / SQFT_PER_ACRE
+    more = new > current + 0.5
+
+    out = dict(basis=dict(
+        vacant="L&I Vacant Property Indicators (land)", parking="OPA building codes containing 'PKG LOT'",
+        taxable=f"some taxable land or building value on the TY{TAX_YEAR} roll",
+        area="OPA total_area", city_area="Census 2020 Gazetteer, Philadelphia city",
+        unmatched_to_roll=dict(vacant=len(lni - parking - on_roll), parking=len(parking - on_roll))))
+    rows = {}
+    for name, sel in (("vacant", kind.eq("vacant").to_numpy()), ("parking", kind.eq("parking").to_numpy()),
+                      ("total", kind.ne("").to_numpy())):
+        t = sel & taxable
+        rows[name] = dict(parcels=int(t.sum()), acres=float(area[t].sum()),
+                          exempt_parcels=int((sel & ~taxable).sum()), exempt_acres=float(area[sel & ~taxable].sum()),
+                          pay_more_pct=float(100 * more[t].mean()), pay_more_acres=float(area[t & more].sum()))
+    out.update(rows)
+    total = rows["total"]["acres"]
+    side = float(np.sqrt(total * SQFT_PER_ACRE))
+    out.update(pct_of_city_land=100 * total / (PHILLY_LAND_SQMI * 640),
+               pct_of_city_area=100 * total / ((PHILLY_LAND_SQMI + PHILLY_WATER_SQMI) * 640),
+               square_side_ft=side, square_side_mi=side / 5280, central_parks=total / CENTRAL_PARK_ACRES,
+               vacant_share_of_total=rows["vacant"]["acres"] / total)
+    return out
+
+
+def render_map(idle: dict) -> None:
     import geopandas as gpd
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle
 
-    g = json.loads(GATHERED_JSON.read_text())
-    side, vac_share = g["square_side_ft"], g["vacant_share_of_total"]
+    side, vac_share = idle["square_side_ft"], idle["vacant_share_of_total"]
     tracts = gpd.read_parquet(CACHE_DIR / "census_tracts.gpq")
     if tracts.crs is None:
         tracts = tracts.set_crs("EPSG:4326")
@@ -813,7 +861,7 @@ def main() -> None:
         large_tract_range=large_tract_range,
         quintile_edges=edges,
         transition=payback(order, headline),
-        vacant_and_parking=json.loads(GATHERED_JSON.read_text()),
+        idle_land=idle_land(g, taxable, current, new),
         homestead_comparison=homestead_comparison(post, category, taxable, homes, groups, q, params, hs, occupied),
         commercial_breakdown=commercial_breakdown(g, groups, taxable, headline, order),
         typical_rowhouse=typical_rowhouse(headline, homes, category, params, order),
@@ -824,7 +872,7 @@ def main() -> None:
     assert abs(numbers["commercial_breakdown"]["coverage"]["change_musd"] - sector) < 0.01, \
         "commercial breakdown does not reproduce its sector's change"
     (OUT / "numbers.json").write_text(json.dumps(numbers, indent=2), encoding="utf-8")
-    render_map()
+    render_map(numbers["idle_land"])
     print(json.dumps({k: numbers[k] for k in
                       ("rates", "homes", "by_property_group", "large_tract_range", "homes_profile",
                        "transition")}, indent=2))
