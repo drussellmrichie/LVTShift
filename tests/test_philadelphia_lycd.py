@@ -22,6 +22,7 @@ from lvt.philadelphia import (  # noqa: E402
     compute_residual_building_value,
     reallocate_land_within_total,
     paint_land_surface,
+    condo_unit_areas,
 )
 
 
@@ -912,3 +913,49 @@ def test_paint_surface_does_not_carry_a_vacant_coded_parcel_opa_values_as_a_buil
     assert res.beyond_support[b_vac]
     assert res.source[b_vac] == "knn"
     assert res.diagnostics["n_carried_at_opa"] == 0
+
+
+# --- condo_unit_areas ---------------------------------------------------------------------
+# OPA records the unit, DOR the building's lot; the area chain hands a unit the whole lot, a
+# sibling's whole lot by KNN, or a 1-sqft placeholder. Each unit takes its share instead.
+def _condo_building():
+    gdf = pd.DataFrame({
+        "parcel_number": ["888000001", "888000002", "888000003", "888000004", "100000001"],
+        "dor_area_sqft": [10_000.0, 10_000.0, 1.0, 10_000.0, 2_000.0],
+        "area_source": ["pin_dor", "knn", "opa_total_area", "knn", "opa_total_area"],
+    })
+    condos = pd.DataFrame({
+        "parcel_number": ["888000001", "888000002", "888000003", "888000004", "100000001"],
+        "is_condo_unit": [True, True, True, True, False],
+        "condo_master_pin": ["5000", "5000", "5000", "5000", None],
+        "condo_unit_share": [0.5, 0.3, 0.2, 0.0, np.nan],
+        "condo_master_lot_sqft": [9_900.0] * 4 + [np.nan],
+    })
+    pin_areas = pd.DataFrame({"pin": ["5000"], "pin_area_sqft": [10_000.0]})
+    return gdf, condos, pin_areas
+
+
+def test_condo_units_take_their_share_of_this_repos_lot():
+    gdf, condos, pin_areas = _condo_building()
+    r = condo_unit_areas(gdf, condos, pin_areas)
+    # share x the master lot as THIS repo measures it (10,000 by PIN, not the sibling's 9,900)
+    assert r.area.tolist()[:3] == pytest.approx([5_000.0, 3_000.0, 2_000.0])
+    assert r.area[3] == 0.0 and r.source[3] == "condo_accessory"      # parking stall
+    assert r.source[:3].eq("condo_share").all()
+    assert r.area[4] == 2_000.0 and r.source[4] == "opa_total_area"   # not a condo: untouched
+    assert r.diagnostics["area_after_sqft"] == pytest.approx(r.diagnostics["master_area_sqft"])
+    assert r.diagnostics["n_master_fallback"] == 0
+
+
+def test_condo_master_lot_falls_back_to_the_sibling_repos_measure():
+    gdf, condos, _ = _condo_building()
+    r = condo_unit_areas(gdf, condos, pd.DataFrame({"pin": ["9"], "pin_area_sqft": [1.0]}))
+    assert r.area[0] == pytest.approx(0.5 * 9_900.0)
+    assert r.diagnostics["n_master_fallback"] == 4
+
+
+def test_condo_shares_past_one_raise():
+    gdf, condos, pin_areas = _condo_building()
+    condos.loc[3, "condo_unit_share"] = 0.4      # the building's land counted 1.4 times
+    with pytest.raises(ValueError, match="sum past 1"):
+        condo_unit_areas(gdf, condos, pin_areas)

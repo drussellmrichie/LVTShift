@@ -726,6 +726,131 @@ def compute_lycd_land_values(
 
 
 @dataclass(frozen=True)
+class CondoAreaResult:
+    """Output of `condo_unit_areas`. Series aligned to the input frame's index."""
+    area: "pd.Series"       # lot area, condo units replaced by their share of the building's lot
+    source: "pd.Series"     # the input area source, or 'condo_share' | 'condo_accessory'
+    diagnostics: dict
+
+    def describe(self) -> str:
+        d = self.diagnostics
+        return (
+            f"condo units: {d['n_units']:,} re-sized to their share of {d['n_buildings']:,} "
+            f"buildings' lots ({d['n_accessory']:,} accessory units at zero; "
+            f"{d['n_master_fallback']:,} lots measured by the sibling repo, the rest by PIN) | "
+            f"condo lot area {d['area_before_sqft']/1e6:,.1f}M -> {d['area_after_sqft']/1e6:,.1f}M sqft "
+            f"(buildings' lots total {d['master_area_sqft']/1e6:,.1f}M) | prior source: "
+            + ", ".join(f"{k}={v:,}" for k, v in d["prior_source_counts"].items())
+        )
+
+
+def condo_unit_areas(
+    gdf,
+    condos,
+    pin_areas,
+    *,
+    area_col: str = "dor_area_sqft",
+    source_col: str = "area_source",
+    parcel_col: str = "parcel_number",
+    share_tolerance: float = 1e-6,
+) -> CondoAreaResult:
+    """Give each condominium unit its share of the building's lot as its lot area.
+
+    OPA records a condo unit, DOR records the building's lot, and nothing in this repo's parcel
+    cache says which is which. `compute_lycd_land_values`' area chain therefore hands a unit
+    either OPA's `total_area` (the 1-sqft placeholder or the whole lot, depending on the
+    building), the unit's own PIN (which, for the unit that anchors the building, is the whole
+    lot), or a neighbour's area by KNN (a sibling unit's whole lot). A land rate multiplied by
+    that area is wrong in both directions, and in the whole-lot case every unit in a building
+    carries the building's full land value, so the building's land is counted once per unit.
+
+    `philly_open_avmkit` resolves each unit to its master lot (`download_dor_parcels.py`:
+    point-in-polygon against DOR) and publishes the unit's livable-area share of that lot
+    (`condo_unit_share`, summing to 1 per building; 0 for accessory units such as parking
+    stalls, which own none of the ground). This function imports that SHARE -- a ratio, as
+    `paint_land_surface` imports a rate -- and multiplies by this repo's own PIN area for the
+    master lot, so the lot is measured on this repo's convention. A master PIN absent from
+    `pin_areas` falls back to the sibling repo's `condo_master_lot_sqft` (true ground square
+    feet in both repos) and is counted.
+
+    The guard reads the quantity the defect inflated: per building, the units' re-sized areas
+    must sum to no more than the building's lot.
+
+    Parameters
+    ----------
+    gdf : DataFrame
+        Needs `parcel_col`, `area_col` and `source_col` (run `compute_lycd_land_values` first).
+    condos : DataFrame
+        `philly_open_avmkit`'s `in/opa_parcels.parquet` columns `parcel_number`,
+        `is_condo_unit`, `condo_master_pin`, `condo_unit_share`, `condo_master_lot_sqft`.
+    pin_areas : DataFrame
+        `pin` + `pin_area_sqft`, the same Mercator-corrected table `compute_lycd_land_values` reads.
+
+    Returns
+    -------
+    CondoAreaResult
+        `.area` and `.source` replace `area_col` and `source_col`; parcels that are not condo
+        units keep their values unchanged.
+    """
+    import numpy as np
+    import pandas as pd
+
+    c = condos[condos["is_condo_unit"].fillna(False).astype(bool)].copy()
+    c = c[c["condo_unit_share"].notna() & c["condo_master_pin"].notna()]
+    c["key"] = c["parcel_number"].astype(str).str.strip().str.zfill(9)
+    c = c.drop_duplicates("key").set_index("key")
+    c["master"] = c["condo_master_pin"].astype(str).str.strip()
+
+    lookup = pin_areas.copy()
+    lookup["pin"] = lookup["pin"].astype(str).str.strip()
+    lookup = lookup.drop_duplicates("pin").set_index("pin")["pin_area_sqft"]
+    own_lot = c["master"].map(lookup)
+    fallback = own_lot.isna() | ~(own_lot > 0)
+    c["master_area"] = own_lot.where(~fallback, pd.to_numeric(c["condo_master_lot_sqft"], errors="coerce"))
+    c = c[c["master_area"].notna() & (c["master_area"] > 0)]
+    c["unit_area"] = c["condo_unit_share"].astype(float) * c["master_area"]
+
+    keys = gdf[parcel_col].astype(str).str.strip().str.zfill(9)
+    is_unit = keys.isin(c.index)
+    k = keys[is_unit]
+    new_area = pd.Series(c["unit_area"].reindex(k).to_numpy(float), index=k.index)
+    share = pd.Series(c["condo_unit_share"].reindex(k).to_numpy(float), index=k.index)
+    master = pd.Series(c["master"].reindex(k).to_numpy(), index=k.index)
+    master_area = pd.Series(c["master_area"].reindex(k).to_numpy(float), index=k.index)
+
+    per_bldg = pd.DataFrame({"master": master, "share": share, "area": new_area, "lot": master_area})
+    by = per_bldg.groupby("master").agg(share=("share", "sum"), area=("area", "sum"), lot=("lot", "first"))
+    over = by["share"] > 1 + share_tolerance
+    if over.any():
+        raise ValueError(
+            f"{int(over.sum()):,} condo buildings' unit shares sum past 1 (max {by['share'].max():.6f}); "
+            "the sibling repo's condo_unit_share is double-counting a building's units")
+    over_lot = by["area"] > by["lot"] * (1 + share_tolerance)
+    if over_lot.any():
+        raise ValueError(f"{int(over_lot.sum()):,} condo buildings' units hold more than the building's lot")
+
+    area = pd.to_numeric(gdf[area_col], errors="coerce").astype(float).copy()
+    source = gdf[source_col].astype(object).copy()
+    before = float(area[is_unit].sum())
+    prior = source[is_unit].value_counts().to_dict()
+    area[is_unit] = new_area
+    source[is_unit] = np.where(share.to_numpy() > 0, "condo_share", "condo_accessory")
+
+    diagnostics = {
+        "n_units": int(is_unit.sum()),
+        "n_condo_rows_in_source": int(len(c)),
+        "n_buildings": int(by.shape[0]),
+        "n_accessory": int((share == 0).sum()),
+        "n_master_fallback": int(fallback.reindex(k).fillna(False).sum()),
+        "area_before_sqft": before,
+        "area_after_sqft": float(new_area.sum()),
+        "master_area_sqft": float(by["lot"].sum()),
+        "prior_source_counts": prior,
+    }
+    return CondoAreaResult(area, source, diagnostics)
+
+
+@dataclass(frozen=True)
 class LandSurfaceResult:
     """Output of `paint_land_surface`. Series aligned to the input frame's index."""
     psf: "pd.Series"            # $/sqft actually used, after the KNN fill

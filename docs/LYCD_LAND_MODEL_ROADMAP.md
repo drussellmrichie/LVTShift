@@ -46,7 +46,7 @@ Two properties of the construction matter for everything below:
 | Flat `k = 0.20` for every improved parcel | Audit finding 3: the OPA-vs-LYCD winner comparison reverses under the FHFA-calibrated prototype | Partly (per-cell share) |
 | Linear in lot area | Sibling ratio study: PRD far above 1.0 on vacant land; `philly_open_avmkit` measures a negative partial correlation of $/sqft with log area and a positive one with frontage/depth | Yes |
 | ~~KNN fallback imputes neighbours' dollar land value, not zone $/sqft times own area~~ | Audit finding 5 | **Fixed 2026-09-05** |
-| Records with no lot area of their own (condominium units above all) take a neighbour's whole-lot area, then hit the cap at 100% of unit value | `model_lycd_reassessment.ipynb` Step 7, the `knn` lot-area-source row | Needs a per-unit share of the building lot, not a tuning |
+| Records with no lot area of their own (condominium units above all) take a neighbour's whole-lot area, then hit the cap at 100% of unit value | `model_lycd_reassessment.ipynb` Step 7, the `knn` lot-area-source row | Needs a per-unit share of the building lot, not a tuning. Painted surfaces already take it (`condo_unit_areas`); the LYCD construction does not |
 | ~~Cap clips land to market value, leaving land + building above market on 24.4% of taxable parcels ($9.31B aggregate)~~ | Audit finding 2, re-measured 2026-09-05 -- materially larger than the audit's original framing (19,514 parcels at land ratio 1.00) | **Fixed 2026-09-05**, wired into `model_lycd.ipynb` |
 | Hard L3 medians step at zone boundaries | Not quantified | Yes (smoothing) |
 
