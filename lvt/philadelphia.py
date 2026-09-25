@@ -1014,9 +1014,9 @@ def paint_land_surface(
     `dor_area_sqft` chain) decides every parcel's land value. The two repos' areas agree within
     5% on 99.9% of joined parcels, but a rate keeps them decoupled by construction.
 
-    Coverage is the reason this is a function and not a merge. 55,351 of LVTShift's TY2026
-    parcels (22% of market value) are not in the AVM universe at all, so an inner join would
-    silently drop a fifth of the roll. Unmatched parcels take the median rate of their
+    Coverage is the reason this is a function and not a merge. Some of LVTShift's parcels are
+    not in the AVM universe at all, and an inner join would silently drop them and their share
+    of the roll (`diagnostics` reports both). Unmatched parcels take the median rate of their
     `knn_k` nearest matched neighbours -- the same `_knn_median_fill` LYCD uses for parcels
     outside GMA coverage -- and are flagged `source == 'knn'` so the report can say how much
     of the base rests on the fill.
