@@ -402,6 +402,19 @@ may not sum past the lot. The LYCD path keeps the old areas so Step 2's drift ch
 `model_lycd.ipynb` still holds; fixing it there means re-running that notebook and everything
 downstream of it.
 
+**Recorded lot areas the sibling repo rejected.** Step 2's chain keeps OPA's `total_area` unless
+it is more than 3x the parcel's own PIN polygon. `philly_open_avmkit` replaces an OPA area more
+than 2x both the DOR polygon and PWD's polygon for the account (`land_area_source == 'pwd_dor'` on
+its land roll) and fits and paints its surfaces on the corrected area -- so a replaced lot's rate
+is for its true size, and multiplying it by OPA's 2-3x record (or by a polygon borrowed from a
+neighbouring pin) overstates land. After `condo_unit_areas`, the painted path runs
+`corrected_lot_areas`, which imports the roll's `land_area_sqft` for flagged parcels whose
+`area_source` is still `opa_total_area` and marks them `pwd_dor`. It imports an area, unlike the
+rate and share above, because this repo has no PWD polygons to re-derive it from; both repos
+measure true ground square feet. Its guard: no flagged parcel may leave with an area more than 2x
+the sibling repo's, whatever its source. The LYCD path keeps OPA's records, for the same
+drift-check reason as the condo step.
+
 ## Philadelphia — Wage Tax Swap
 
 `cities/philadelphia/model_wage_tax_swap.ipynb` is a fifth Philadelphia notebook, but it doesn't

@@ -23,6 +23,7 @@ from lvt.philadelphia import (  # noqa: E402
     reallocate_land_within_total,
     paint_land_surface,
     condo_unit_areas,
+    corrected_lot_areas,
 )
 
 
@@ -959,3 +960,53 @@ def test_condo_shares_past_one_raise():
     condos.loc[3, "condo_unit_share"] = 0.4      # the building's land counted 1.4 times
     with pytest.raises(ValueError, match="sum past 1"):
         condo_unit_areas(gdf, condos, pin_areas)
+
+
+# --- corrected_lot_areas -------------------------------------------------------------------
+# The sibling repo replaces an OPA area more than 2x both polygons; LVTShift's own override
+# waits for 3x, so the 2-3x band (and borrowed polygons) kept OPA's record under a rate fitted
+# on the corrected area.
+def _flagged_lots():
+    gdf = pd.DataFrame({
+        "parcel_number": ["1", "2", "3", "4", "5"],
+        "dor_area_sqft": [25_000.0, 9_000.0, 1_200.0, 4_000.0, 3_000.0],
+        "area_source": ["opa_total_area", "pin_override", "condo_share", "opa_total_area", "opa_total_area"],
+    })
+    roll = pd.DataFrame({
+        "parcel_number": ["000000001", "000000002", "000000003", "000000004", "000000005"],
+        "land_area_sqft": [10_000.0, 9_100.0, 30_000.0, 4_000.0, 1_500.0],
+        "land_area_source": ["pwd_dor", "pwd_dor", "pwd_dor", "opa", "pwd_dor"],
+    })
+    return gdf, roll
+
+
+def test_flagged_opa_areas_take_the_sibling_repos_polygon():
+    gdf, roll = _flagged_lots()
+    r = corrected_lot_areas(gdf, roll)
+    assert r.area[0] == 10_000.0 and r.source[0] == "pwd_dor"     # 2.5x: LVTShift's 3x rule missed it
+    assert r.area[4] == 1_500.0 and r.source[4] == "pwd_dor"
+    assert r.area[1] == 9_000.0 and r.source[1] == "pin_override"  # already on this repo's polygon
+    assert r.area[2] == 1_200.0 and r.source[2] == "condo_share"   # a unit's share, not the lot
+    assert r.area[3] == 4_000.0 and r.source[3] == "opa_total_area"  # not flagged: untouched
+    assert r.diagnostics["n_corrected"] == 2
+    assert r.diagnostics["n_kept_own_source"] == 2
+
+
+def test_a_correction_that_grows_a_lot_raises():
+    gdf, roll = _flagged_lots()
+    roll.loc[0, "land_area_sqft"] = 50_000.0
+    with pytest.raises(ValueError, match="GROW"):
+        corrected_lot_areas(gdf, roll)
+
+
+def test_a_flagged_lot_left_inflated_on_another_source_raises():
+    gdf, roll = _flagged_lots()
+    gdf.loc[1, "dor_area_sqft"] = 30_000.0     # a pin_override still 3.3x the sibling's polygon
+    with pytest.raises(ValueError, match="still exceed"):
+        corrected_lot_areas(gdf, roll)
+
+
+def test_a_roll_without_the_area_rule_raises():
+    gdf, roll = _flagged_lots()
+    with pytest.raises(ValueError, match="predates"):
+        corrected_lot_areas(gdf, roll.drop(columns="land_area_source"))
