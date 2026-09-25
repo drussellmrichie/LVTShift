@@ -864,6 +864,29 @@ def signed_pct(x):
     return f"{x:+.1f}%"
 
 
+_QUINTILE_WORDS = {
+    "inc_q": ("poorest", "second-poorest", "middle", "second-richest", "richest"),
+    "min_q": ("whitest", "second-whitest", "middle", "second-most non-white", "most non-white"),
+}
+
+
+def _group_phrases(rows):
+    """English list of equity strata rows, e.g. 'the richest fifth by income and the whitest
+    fifth by non-white share'."""
+    parts = []
+    for _, r in rows.iterrows():
+        if r["stratum"] in _QUINTILE_WORDS:
+            q = int(str(r["level"])[1])
+            axis = "by income" if r["stratum"] == "inc_q" else "by non-white share"
+            parts.append(f"the {_QUINTILE_WORDS[r['stratum']][q - 1]} fifth {axis}")
+        else:
+            band = str(r["level"]).replace(" Black", "").replace("<", "under ").replace(">", "over ")
+            parts.append(f"block groups {band} Black")
+    if not parts:
+        return "none"
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def equity_section(eq, H):
     st, corr, knn, edges = eq["strata"], eq["bg_corr"], eq["knn"], eq["edges"]
 
@@ -901,6 +924,12 @@ def equity_section(eq, H):
         f"the richest-poorest or whitest-most-non-white ordering flips with the abatement treatment "
         f"on {len(EQ_SURFACES) - stable} surface(s); revise sec:equity and the abstract")
     H.add("EqSurfaces", len(EQ_SURFACES), num)
+
+    # Which groups have most homes paying MORE on paired sales once the abatements have expired.
+    # Report.tex names them; generated so the list cannot go stale when a group crosses 50%.
+    sub = st[(st.surface == "S5 paired-sales (certified)") & (st.treatment == "expired")]
+    losing = sub[sub["homes_win_pct"] < 50]
+    H.add("EqSfiveExpiredLosingGroups", _group_phrases(losing), text)
 
     # The certified surface's decomposition: flat-rate revaluation, then the split rate on top.
     for s_lab, s_key in (("S5 paired-sales (certified)", "Sfive"), ("E-GBM (most accurate)", "Egbm")):
