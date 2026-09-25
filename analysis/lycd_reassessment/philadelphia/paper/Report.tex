@@ -49,7 +49,7 @@ simplest candidate: keep the fixed fraction, but apply it to a market-area rate 
 foot instead of to each parcel's own total (the ``LYCD'' allocation). Two readings of that
 proposal give opposite answers. Read as a \emph{revaluation}, with land re-valued and the
 building left alone, it moves every bill in the city and cuts \LycdADownTenPct{} of them by
-more than a tenth --- but two-thirds of the increases land on vacant lots, where the method's
+more than a tenth --- but \LycdAVacantShareOfShift{} of the increases land on vacant lots, where the method's
 land values run \LycdSalesLYCDAgg{} what those lots actually sell for, and the sum of land and
 building exceeds the parcel's own assessment on \LycdAOvershootPct{} of improved parcels. Read
 as the ordinance is written --- a re-split \emph{inside} each parcel's unchanged total, with
@@ -647,7 +647,9 @@ Table~\ref{tab:h2h} measured.
 
 \subsection{What it does to the roll}
 
-Painted onto every parcel --- the rate imported, this notebook's own lot area applied --- the
+Painted onto every parcel --- the rate imported and this notebook's own lot area applied, except
+that a condominium unit takes its livable-area share of its building's lot, and a lot whose
+recorded area is more than twice both surveyed polygons takes the polygon's --- the
 paired-sales surface puts \LycdSfiveLandBaseB{} of land on the roll, against
 \LycdLycdLandBaseB{} for the zone-rate allocation and \LycdOpaLandBaseB{} for OPA:
 \LycdSfiveOverOpaLand{} the assessor's land, \LycdSfiveOverLycdLand{} the allocation's. Where it
@@ -660,13 +662,15 @@ Three things about the swap need saying before its results are read. First, \Lyc
 parcels (\LycdSfiveKnnValuePct{} of market value) are not in the AVM universe the surface was
 built on; they take the median rate of their nearest matched neighbours, at a median of
 \LycdSfiveKnnFillPsf{} a square foot against \LycdSfiveJoinedPsf{} for joined parcels. Second,
-the improved-parcel cap binds hard: before it, the surface's land \emph{alone} exceeds OPA's
+the improved-parcel cap binds: before it, the surface's land \emph{alone} exceeds OPA's
 total assessment on \LycdSfivePreCapExceeds{} improved parcels, by \LycdSfiveCapRemovedB{} in
-aggregate. \LycdSfivePreCapExceedsCondo{} of those are the known lot-area artifact (a
-condominium unit inheriting a whole lot's area); the remaining \LycdSfivePreCapExceedsCore{}
-(\LycdSfivePreCapExceedsCorePct{} of improved parcels with a lot of their own,
-\LycdSfiveCapRemovedCoreB{}) are parcels whose land, at what nearby land sells for, is worth
-more than OPA says the whole property is. Under Section~3(c) that is a finding about the
+aggregate. \LycdSfivePreCapExceedsImputed{} of those are records with no lot of their own in
+the parcel file, whose area is borrowed from a neighbour and so says nothing about the
+property. The remaining \LycdSfivePreCapExceedsCore{} (\LycdSfivePreCapExceedsCorePct{} of
+improved parcels whose lot area is not imputed, \LycdSfiveCapRemovedCoreB{}; among them
+\LycdSfivePreCapExceedsCondo{} condominium units, priced on their share of the building's lot)
+are parcels whose land, at what nearby land sells for, is worth more than OPA says the whole
+property is. Under Section~3(c) that is a finding about the
 totals, and it is the first concrete estimate of how many of them a sales-based land standard
 would put under pressure. Third, on the uniformity tests (Table~\ref{tab:uniformity}, last two
 columns) the raw sales surface passes the sentence OPA and the allocation fail between them:
@@ -769,7 +773,7 @@ sales-based surfaces the pattern turns over. Under paired sales, homes' bills ch
 \LycdEqSfiveEndsHomesNonwhite{} in the most non-white and \LycdEqSfiveEndsHomesWhite{} in the
 whitest; across all taxable parcels the poorest fifth's bill changes by
 \LycdEqSfiveEndsAllPoor{} and the richest's by \LycdEqSfiveEndsAllRich{}. The interpolation and the
-boosted trees tell the same story at nearly the same size (Figure~\ref{fig:eqprofile}), and across
+boosted trees tell the same story less steeply (Figure~\ref{fig:eqprofile}), and across
 the \LycdEqBlockGroups{} block groups with enough homes to measure, the correlation between homes'
 change and log median income is \LycdEqSfiveRInc{} on paired sales against \LycdEqOpaRInc{} on OPA.
 
@@ -800,8 +804,8 @@ the richest-versus-poorest and whitest-versus-most-non-white orderings are the s
 treatment. What the treatment does change is whether a majority of homes pays less in every
 group. With the reform taxing abated buildings, the lowest share of homes paying less in any
 group is \LycdEqSfiveEndsMinWin{} on paired sales; compared after the abatements have expired, it
-is \LycdEqSfiveExpiredMinWin{}, and the groups where most homes pay more are the richest and the
-whitest.
+is \LycdEqSfiveExpiredMinWin{}, and the groups where most homes pay more are
+\LycdEqSfiveExpiredLosingGroups{}.
 
 \paragraph{It is the tax as well as the revaluation.} On the sales-based surfaces the change has
 two parts: re-valuing land at today's flat rate, and the split rate applied on top. Both are
@@ -817,8 +821,8 @@ neighbourhoods'. The first is vertical bias. A surface that values dear land rel
 than cheap land would push tax toward expensive neighbourhoods under any tax, and IAAO's
 price-related bias measures exactly that, with an acceptable band of $\pm$\LycdIaaoPrbBand{}. The
 paired-sales surface sits outside it (\LycdSfivePrb{}), as does OPA in the other direction
-(\LycdSzeroPrb{}). But the boosted trees sit inside it (\LycdEgbmPrb{}) and are progressive by
-almost as much (\LycdEqEgbmEndsHomesPoor{} poorest, \LycdEqEgbmEndsHomesRich{} richest,
+(\LycdSzeroPrb{}). But the boosted trees sit inside it (\LycdEgbmPrb{}) and are still clearly
+progressive (\LycdEqEgbmEndsHomesPoor{} poorest, \LycdEqEgbmEndsHomesRich{} richest,
 \LycdEqEgbmEndsHomesNonwhite{} most non-white, \LycdEqEgbmEndsHomesWhite{} whitest), so the tilt is
 not mainly an artifact of bias in the surface. The second is the parcels painted by nearest
 neighbour: they are at most \LycdEqKnnMaxSharePct{} of the homes in any group, and dropping them
@@ -914,8 +918,9 @@ component, and a rate table is a convenience derived from it.
   as a separate market.
 \item \textbf{\LycdSfiveKnnValuePct{} of market value is painted by nearest neighbour, and
   the cap removes \LycdSfiveCapRemovedB{}.} Neither is a property of the surface. The first is
-  the AVM universe's coverage; the second is the lot-area artifact on condominium units plus
-  \LycdSfivePreCapExceedsCore{} parcels whose totals the sales say are too low. Both are
+  the AVM universe's coverage; the second is \LycdSfivePreCapExceedsCore{} parcels whose totals
+  the sales say are too low, plus \LycdSfivePreCapExceedsImputed{} records whose lot area is
+  borrowed from a neighbour. Both are
   reported rather than fixed here, and both bound what can be claimed about the surface's
   effect on the roll.
 \item \textbf{The land-tax comparison is by neighbourhood, not by household.}
