@@ -28,8 +28,10 @@ from build_philly_block_zoom import (  # noqa: E402
 SQFT_PER_ACRE = 43560.0
 PHILLY_LAND_SQMI = 134.18
 CENTRAL_PARK_ACRES = 843.0
-CITY_FILL = "#1b212b"
-CITY_EDGE = "#39424f"
+# The city silhouette has to read against BG (#0d1117) from across a room. An
+# earlier fill/edge pair (#1b212b on #39424f) was nearly invisible at web scale.
+CITY_FILL = "#242c3a"
+CITY_EDGE = "#8496ab"
 
 
 def main() -> int:
@@ -72,7 +74,7 @@ def main() -> int:
     fig = plt.figure(figsize=(11.0, 11.8), dpi=200, facecolor=BG)
     ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
     ax.set_facecolor(BG)
-    city.plot(ax=ax, facecolor=CITY_FILL, edgecolor=CITY_EDGE, linewidth=0.9, zorder=1)
+    city.plot(ax=ax, facecolor=CITY_FILL, edgecolor=CITY_EDGE, linewidth=1.8, zorder=1)
     minx, miny, maxx, maxy = city.total_bounds
     padx = (maxx - minx) * 0.045
     pady = (maxy - miny) * 0.045
@@ -118,11 +120,14 @@ def main() -> int:
              f"about {total_ac/CENTRAL_PARK_ACRES:.0f} times the area of Central Park.",
              color=MUTED, fontsize=12.5, va="top", linespacing=1.55)
 
+    # The city outline runs through the footnote's corner, so the source block gets a
+    # BG-colored backing to stay legible against the fill.
     fig.text(0.035, 0.030,
              "Sources: City of Philadelphia — L&I Vacant Property Indicators (land);\n"
              "Office of Property Assessment parcel records (surface parking).\n"
              "Square area equals the summed recorded ground area of every such parcel.",
-             color=MUTED, fontsize=8.2, va="bottom", linespacing=1.6)
+             color=MUTED, fontsize=8.2, va="bottom", linespacing=1.6, zorder=10,
+             bbox=dict(facecolor=BG, edgecolor="none", alpha=0.82, pad=4.0))
     fig.text(0.965, 0.030, "Progress and Poverty Institute", color=MUTED,
              fontsize=9, ha="right", va="bottom")
 
