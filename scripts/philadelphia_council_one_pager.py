@@ -78,7 +78,7 @@ CENTRAL_PARK_ACRES = 843.0
 OPA_ATTRIBUTES = REPO_ROOT / "analysis/ownership/philadelphia/opa_attributes.parquet"   # fetch_opa_attributes.py
 COUNCIL_DISTRICTS = CACHE_DIR / "council_districts.gpq"     # cached by scripts/map_philadelphia_tax_changes.py
 COUNCIL_DISTRICTS_SOURCE = "https://opendata.arcgis.com/datasets/9298c2f3fa3241fbb176ff1e84d33360_0.geojson"
-FHFA_TRACTS = CACHE_DIR / "fhfa_land_share_by_tract.csv"    # see cities/philadelphia/model_lycd_refined_prototype.ipynb
+FHFA_TRACTS = CACHE_DIR / "fhfa_land_share_by_tract.csv"    # 2020 tracts; scripts/build_philadelphia_fhfa_tract_shares.py
 PHASE_IN_BASIS = dict(baseline="rate", revalue_bare_lots=True)   # the phase-in options that match this script
 # The phase-in's final-year rates may differ from this script's only through the two abated cohorts
 # (see payback()); on TY2026 that moves them by under a tenth of a percent.
@@ -762,10 +762,11 @@ def render_map(idle: dict) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Numbers and map for the Council candidate LVT one-pager.")
-    ap.add_argument("--homestead-order", choices=HOMESTEAD_ORDERS, default="building_first",
+    ap.add_argument("--homestead-order", choices=HOMESTEAD_ORDERS, default="value_share",
                     help="which line the Homestead Exemption comes off in the headline figures "
-                         "(default building_first, 53 Pa.C.S. Sec. 8583(c)); homestead_comparison "
-                         "reports every order regardless")
+                         "(default value_share, the flyer's rule, which needs 53 Pa.C.S. Sec. 8583(c) "
+                         "amended; building_first is current law); homestead_comparison reports every "
+                         "order regardless")
     order = ap.parse_args().homestead_order
 
     OUT.mkdir(parents=True, exist_ok=True)
