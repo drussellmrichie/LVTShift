@@ -291,29 +291,14 @@ def figure_fhfa_land_price() -> None:
     fhfa_csv = PHL_DATA_DIR / "fhfa_land_share_by_tract.csv"
     tracts_path = PHL_DATA_DIR / "census_tracts.gpq"
     if not fhfa_csv.exists() or not tracts_path.exists():
-        print("  SKIPPED fhfa_land_price figure (missing cached fhfa_land_share_by_tract.csv "
-              "or census_tracts.gpq -- run scripts/map_philadelphia_fhfa_land_price.py's data "
-              "prep first)")
+        print("  SKIPPED fhfa_land_price figure (missing fhfa_land_share_by_tract.csv or "
+              "census_tracts.gpq -- run scripts/build_philadelphia_fhfa_tract_shares.py first)")
         return
 
-    # Reconstruct $/sqft from the audit's cached FHFA land-price workbook if present, else
-    # fall back to plotting land SHARE (still sourced, just a different FHFA column).
-    land_price_xlsx = None
-    for cand in Path.home().glob("AppData/Local/Temp/claude/**/land_prices_2024.xlsx"):
-        land_price_xlsx = cand
-        break
-
     tracts = gpd.read_parquet(tracts_path)
-    if land_price_xlsx and land_price_xlsx.exists():
-        x = pd.read_excel(land_price_xlsx, sheet_name="Cross-Section Census Tracts", header=1)
-        phl = x[(x["State"] == "Pennsylvania") & (x["County"] == "Philadelphia County")].copy()
-        phl["tract_geoid"] = phl["Census Tract"].astype("int64").astype(str).str.zfill(11)
-        phl["value"] = phl["Land Value\n(Per Acre, As-Is)"] / 43_560
-        label = "Single-family land price ($/sqft)"
-    else:
-        phl = pd.read_csv(fhfa_csv, dtype={"tract_geoid": str})
-        phl["value"] = phl["fhfa_land_share"] * 100
-        label = "Single-family land share of value (%)"
+    phl = pd.read_csv(fhfa_csv, dtype={"tract_geoid": str})
+    phl["value"] = phl["fhfa_land_price_psf"]
+    label = "Single-family land price ($/sqft)"
 
     gdf = tracts.merge(phl[["tract_geoid", "value"]], on="tract_geoid", how="left")
     gdf = gdf.to_crs("EPSG:3857")

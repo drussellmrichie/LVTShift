@@ -3,7 +3,8 @@ Philadelphia — FHFA land price per square foot by census tract
 -----------------------------------------------------------------
 Choropleth of single-family residential land value ($/sqft), from the FHFA's
 land-price dataset (Davis, Larson, Oliner & Shui WP 19-01, June 2024 update),
-Cross-Section Census Tracts sheet, converted from $/acre to $/sqft.
+Cross-Section Census Tracts sheet, converted from $/acre to $/sqft and moved from
+FHFA's 2010 census tracts onto 2020 tracts.
 
 This is the external benchmark used in the mayor-exposure deep audit
 (analysis/political/philadelphia_mayor_exposure_audit.md, Link 2b) to
@@ -12,10 +13,9 @@ the spatial picture behind that number: land price is not uniform across
 the city, it's concentrated in Center City / high-demand tracts.
 
 Data sources:
-  - FHFA land-price dataset, "Cross-Section Census Tracts" sheet, Philadelphia
-    County rows only. Cached at the path in FHFA_XLSX below (downloaded during
-    the mayor-exposure audit; re-download from
-    https://www.fhfa.gov/document/land-prices_2024_20_june.xlsx if missing).
+  - cities/philadelphia/data/fhfa_land_share_by_tract.csv, written by
+    scripts/build_philadelphia_fhfa_tract_shares.py (FHFA's tract estimates on
+    2020 tracts; see that script for the crosswalk).
   - Census tract boundaries via lvt.census_utils.get_census_tracts_shapefile,
     cached at cities/philadelphia/data/census_tracts.gpq.
 
@@ -37,24 +37,14 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-FHFA_XLSX = Path(
-    r"C:\Users\druss\AppData\Local\Temp\claude\C--projects-LVTShift"
-    r"\f3fca2e4-f1d8-4185-9685-0bb657445de8\scratchpad\land_prices_2024.xlsx"
-)
+FHFA_TRACTS = REPO_ROOT / "cities/philadelphia/data/fhfa_land_share_by_tract.csv"
 TRACTS_PATH = REPO_ROOT / "cities/philadelphia/data/census_tracts.gpq"
 OUTPUT_PATH = REPO_ROOT / "analysis/reports/philadelphia/fhfa_land_price_per_sqft.png"
 
-ACRE_TO_SQFT = 43_560
-
-
 def load_fhfa_land_price() -> pd.DataFrame:
-    x = pd.read_excel(FHFA_XLSX, sheet_name="Cross-Section Census Tracts", header=1)
-    phl = x[(x["State"] == "Pennsylvania") & (x["County"] == "Philadelphia County")].copy()
-    phl["tract_geoid"] = phl["Census Tract"].astype("int64").astype(str).str.zfill(11)
-    phl["land_price_psf"] = phl["Land Value\n(Per Acre, As-Is)"] / ACRE_TO_SQFT
-    return phl[["tract_geoid", "land_price_psf", "Land Share of Property Value", "Property Value (As-is)"]].rename(
-        columns={"Land Share of Property Value": "land_share", "Property Value (As-is)": "property_value"}
-    )
+    f = pd.read_csv(FHFA_TRACTS, dtype={"tract_geoid": str})
+    return f.rename(columns={"fhfa_land_price_psf": "land_price_psf", "fhfa_land_share": "land_share",
+                             "fhfa_property_value": "property_value"})
 
 
 def main():
@@ -104,7 +94,7 @@ def main():
         0.5, 0.02,
         f"Median ${vals.median():.0f}/sqft (p10 ${vals.quantile(.1):.0f}, p90 ${vals.quantile(.9):.0f}) "
         f"across {matched} tracts. Hatched = no FHFA estimate ({n_missing} tracts, "
-        f"typically too few qualifying single-family sales).",
+        f"typically too few qualifying single-family appraisals).",
         fontsize=8.5,
         va="bottom",
         ha="center",
