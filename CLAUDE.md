@@ -99,6 +99,7 @@ from lvt.cloud_utils import get_feature_data_with_geometry
 - **Exemption hierarchy**: Full exemption flags applied first → dollar exemptions to improvements → remaining to land
 - **Centroid-based spatial joins**: Parcels joined to Census block groups via centroids in EPSG:3857 to avoid boundary edge cases
 - **Census fetching**: TIGERweb block-group request (Layer 1), automatically chunked by tract for very large counties; calls run in a background thread with a 90-second timeout
+- **Undefined is NaN, not 0**: a percent change on a $0 current bill, or a change on a missing bill, is undefined. Never `.replace([np.inf, -np.inf], 0).fillna(0)` a tax change; use `lvt_utils.pct_change_of_totals`. The export builder recomputes `tax_change` itself and leaves it NaN where a bill is missing; `tests/test_lvt_utils_regressions.py` pins both.
 
 ### The recurring failure shape: a guard that reads a different column than the one that broke
 
