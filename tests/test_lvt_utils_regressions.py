@@ -3,9 +3,7 @@ Regression tests for lvt/lvt_utils.py: exemption order, tax credits, the revenue
 split-millage solver, building abatement, and the category summary.
 
 Ported from the retired philly_lvt_shift repo, where they pinned a copy of this module; they
-pass against the live one. Two pin known defects in `calculate_category_tax_summary` and are
-written as strict xfails asserting the correct behaviour, so fixing the defect turns them into
-unexpected passes and the marker has to come off.
+pass against the live one.
 """
 from __future__ import annotations
 
@@ -292,15 +290,10 @@ class TestModelSplitRateTax:
 
 class TestCalculateCategoryTaxSummary:
     """
-    The two xfails pin known defects: a pre-existing `tax_change` column is aggregated
-    instead of recomputed, and a zero current bill gets `tax_change_pct = 0` rather than an
-    undefined value. Until they are fixed, a caller must drop `tax_change` before calling
-    and must not read zero-baseline parcels' percentages from this summary.
+    `tax_change` is always recomputed from the two tax columns, and a zero current bill has
+    an undefined percent change that stays out of the percentage statistics.
     """
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "lvt_utils.calculate_category_tax_summary keeps a caller's existing tax_change column "
-        "instead of recomputing it from current_tax_col / new_tax_col"))
     def test_stale_tax_change_is_recomputed(self):
         df = pd.DataFrame({
             "PROPERTY_CATEGORY": ["A", "A", "B"],
@@ -315,9 +308,6 @@ class TestCalculateCategoryTaxSummary:
         a = summary[summary["PROPERTY_CATEGORY"] == "A"].iloc[0]
         assert a["total_tax_change_dollars"] == pytest.approx(100.0)  # 50+50
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "lvt_utils.calculate_category_tax_summary sets tax_change_pct = 0 for a zero current "
-        "bill, which pulls category means and medians toward zero; it should be undefined"))
     def test_zero_baseline_pct_is_undefined(self):
         df = pd.DataFrame({
             "PROPERTY_CATEGORY": ["A"],
@@ -329,6 +319,25 @@ class TestCalculateCategoryTaxSummary:
             current_tax_col="current_tax", new_tax_col="new_tax",
         )
         assert np.isnan(summary.iloc[0]["mean_tax_change_pct"])
+
+    def test_zero_baseline_parcel_counts_in_dollars_not_percentages(self):
+        # Real exports hold effectively-exempt parcels (0 -> 0) and parcels entering the
+        # roll (0 -> positive) inside ordinary categories; neither may read as a 0% change
+        df = pd.DataFrame({
+            "PROPERTY_CATEGORY": ["A", "A", "A", "A"],
+            "current_tax": [100.0, 100.0, 0.0, 0.0],
+            "new_tax": [150.0, 50.0, 0.0, 400.0],   # +50%, -50%, 0 -> 0, 0 -> 400
+        })
+        a = calculate_category_tax_summary(
+            df, category_col="PROPERTY_CATEGORY",
+            current_tax_col="current_tax", new_tax_col="new_tax",
+        ).iloc[0]
+        assert a["property_count"] == 4
+        assert a["pct_defined_count"] == 2
+        assert a["total_tax_change_dollars"] == pytest.approx(400.0)
+        assert a["mean_tax_change_pct"] == pytest.approx(0.0)
+        assert a["pct_increase_gt_threshold"] == pytest.approx(50.0)
+        assert a["pct_decrease_gt_threshold"] == pytest.approx(50.0)
 
     def test_missing_category_column_returns_empty(self):
         df = pd.DataFrame({"current_tax": [1.0], "new_tax": [2.0]})
