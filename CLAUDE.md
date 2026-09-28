@@ -13,6 +13,9 @@ The repo is designed to be driven by an agent. The user-facing entry points are 
 ```bash
 # Any Python 3.11+ environment works; install the requirements into it
 pip install -r requirements.txt
+# Make the lvt package importable from anywhere, including sibling repos
+# (editable: Python reads this checkout's lvt/ folder, so there is no copy to drift)
+pip install -e . --no-deps
 
 # Environment variables
 cp env.template .env
