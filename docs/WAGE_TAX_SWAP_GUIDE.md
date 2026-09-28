@@ -5,7 +5,8 @@ Every other reform in this repo changes the *rate* or *base* of the property tax
 eliminates a completely different tax instrument — a payroll tax — and replaces its revenue
 with a new, separate land value tax. The existing property tax is left untouched throughout.
 
-Worked example: `cities/philadelphia/model_wage_tax_swap.ipynb`, modeling Philadelphia's Wage &
+Worked example: `cities/philadelphia/model_wage_tax_swap.ipynb` (in the sibling
+`philly_land_tax_research` repo), modeling Philadelphia's Wage &
 Earnings Tax (3.75% resident / 3.44% non-resident, ~$2.5B/yr, roughly two-thirds of all
 city-generated revenue).
 

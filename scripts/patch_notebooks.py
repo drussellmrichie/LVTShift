@@ -498,6 +498,13 @@ def fix_philadelphia_shared_cache():
     """
     phl = CITIES_DIR / "philadelphia"
 
+    def present(path: Path) -> bool:
+        # The research notebooks moved to the sibling philly_land_tax_research repo
+        # (2026-09-28); this patch was applied there before the move.
+        if not path.exists():
+            print(f"  philadelphia {path.name}: not in this repo, skipped")
+        return path.exists()
+
     numeric_loop_old = (
         "    for col in ['taxable_land', 'taxable_building', 'market_value', 'exempt_land', 'exempt_building']:\n"
         "        gdf[col] = pd.to_numeric(gdf[col], errors='coerce').fillna(0.0)\n"
@@ -545,8 +552,8 @@ def fix_philadelphia_shared_cache():
 
     # model_post_abatement.ipynb: add owner_1 + owner_2 to the OPA fetch
     path = phl / "model_post_abatement.ipynb"
-    nb = load_nb(path)
-    n_post = patch_cells(nb, [
+    nb = load_nb(path) if present(path) else None
+    n_post = nb is not None and patch_cells(nb, [
         (
             "    # Step 2: Download current OPA for geometry and category codes\n",
             "    # Step 2: Download current OPA for geometry, category codes, owner name(s),\n"
@@ -561,7 +568,8 @@ def fix_philadelphia_shared_cache():
     ])
     if n_post:
         save_nb(path, nb)
-    print(f"  philadelphia model_post_abatement.ipynb: {n_post} replacement(s)")
+    if nb is not None:
+        print(f"  philadelphia model_post_abatement.ipynb: {n_post} replacement(s)")
 
     # LYCD notebooks: fail loudly if the cache is missing required columns
     guard = (
@@ -577,6 +585,8 @@ def fix_philadelphia_shared_cache():
     )
     for name in ("model_lycd.ipynb", "model_lycd_post_abatement.ipynb"):
         path = phl / name
+        if not present(path):
+            continue
         nb = load_nb(path)
         n = patch_cells(nb, [
             (
@@ -599,6 +609,8 @@ def fix_philadelphia_shared_cache():
     )
     for name, addition in (("model.ipynb", extra_rows), ("model_post_abatement.ipynb", owner_row + extra_rows)):
         path = phl / name
+        if not present(path):
+            continue
         nb = load_nb(path)
         n = 0
         for cell in nb.get("cells", []):

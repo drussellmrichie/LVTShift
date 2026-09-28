@@ -144,17 +144,19 @@ analysis/
   legal/                 LVT legal briefs per city (gitignored — local only)
   explainers/            Model methodology explainers per city (gitignored — local only)
   political/             Political viability briefs per city (gitignored — local only)
-  audits/                Dated, point-in-time audit findings (never edited in place)
 
 scripts/
   run_all_cities.py             Batch notebook runner (patches scrape flags, reports pass/fail)
   patch_notebooks.py            Idempotent patches for ratio harmonization and bug fixes
-  map_philadelphia_tax_changes.py  Choropleth maps of tax change % by block group + council district
 
 .claude/skills/      Agent skill files (read by the agent during pipeline execution)
 .claude/commands/    Slash-command wrappers for the four user-facing skills
 docs/                Methodology guides and per-paradigm specs (see Modeling Approaches)
 ```
+
+Philadelphia's research program built on this toolkit (land-surface reassessment, ownership,
+the single-tax ledger, the wage-tax and UBI worked examples, the web map) lives in a separate
+private repo; this one keeps Philadelphia's standard model.
 
 **Data flow:**
 
@@ -285,7 +287,7 @@ All runnable cities use a harmonized **4:1 split-rate** scenario (land taxed at 
 | Highlands Ranch | CO | 16K | ✓ CSV | Douglas County |
 | Minneapolis | MN | 122.7K | ✓ CSV | Full tax bill; 4:1 split-rate |
 | Oak Forest | IL | 10.7K | ✓ CSV | Cook County PTAXSIM + CCAO AV; city levy only; data from sibling project |
-| Philadelphia | PA | 580K | ✓ CSV (4 variants) | OPA via Carto; city+school levy; 2024 vintage; 4 notebooks (OPA/LYCD × standard/post-abatement); maps in `analysis/reports/` |
+| Philadelphia | PA | 580K | ✓ CSV (4 variants) | OPA via Carto; city+school levy; 2024 vintage; standard OPA model here; LYCD and post-abatement variants in the Philadelphia research repo; maps in `analysis/reports/` |
 | Pittsburgh | PA | — | ✓ CSV | Condo collapse; city levy only |
 | Pueblo | CO | 47K | ✓ CSV | Pueblo County |
 | Rochester | NY | 58K | ✓ CSV | Homestead/non-homestead dual millage |

@@ -17,6 +17,9 @@ capitalization and incidence estimates (see `docs/KAPPA_CAPITALIZATION_EVIDENCE.
 `G` is net-new road/curb rent, sourced from the sibling cordon-pricing model's run
 artifacts. `h` is a collections/surrender haircut on rent.
 
+The ledger notebook that drives this module, `cities/philadelphia/model_single_tax_ledger.ipynb`,
+and the `model_lvt_ubi.ipynb` run it cites are in the sibling `philly_land_tax_research` repo.
+
 kappa* is exact because kappa enters linearly. `kappa* <= 0` means the bundle pencils
 with no capitalization at all; `kappa* > 1` means it needs **super-ATCOR** capitalization
 -- more rent than the abolished revenue. That is not impossible: Gaffney's EBCOR (Excess
