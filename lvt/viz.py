@@ -954,7 +954,11 @@ def _make_category_chart(
         specific to one category, like an imputed building value). Wrapped
         automatically; pass ``None`` to omit.
     """
-    plot_df = cat_summary[cat_summary['property_count'] >= min_count].copy()
+    # The bar is a median percent change, so gate on the parcels that have one (a zero
+    # current bill has none); fall back to property_count for summaries built elsewhere
+    count_col = 'pct_defined_count' if 'pct_defined_count' in cat_summary.columns else 'property_count'
+    plot_df = cat_summary[cat_summary[count_col] >= min_count].copy()
+    plot_df = plot_df.dropna(subset=['median_tax_change_pct'])
     plot_df = plot_df.sort_values('median_tax_change_pct').reset_index(drop=True)
     if 'total_tax_change_dollars' not in plot_df.columns:
         plot_df['total_tax_change_dollars'] = (
@@ -1368,6 +1372,14 @@ def create_city_report(
         df, category_col=cat_col, current_tax_col='current_tax', new_tax_col='new_tax',
     )
     if not cat_summary.empty:
+        # Name the categories the chart leaves out because most of their parcels pay
+        # nothing today, so the omission is visible rather than silent
+        dropped = cat_summary[(cat_summary['property_count'] >= min_category_count)
+                              & (cat_summary['pct_defined_count'] < min_category_count)]
+        for _, r in dropped.iterrows():
+            print(f"create_city_report: category_impact.png omits '{r[cat_col]}' - only "
+                  f"{int(r['pct_defined_count']):,} of {int(r['property_count']):,} parcels "
+                  f"have a nonzero current tax (net change ${r['total_tax_change_dollars']:,.0f}).")
         fig = _make_category_chart(cat_summary, cat_col, city_title,
                                    min_count=min_category_count,
                                    footnote=category_chart_footnote)

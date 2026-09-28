@@ -162,6 +162,13 @@ def calculate_category_tax_summary(
     with tax increases greater than a given threshold (default 10%) and decreases greater than the negative
     of the threshold.
 
+    `tax_change` is always recomputed as `new_tax_col - current_tax_col`; any existing
+    `tax_change` column on `df` is ignored. A parcel whose current tax is zero has an
+    undefined percent change: it counts in the dollar statistics and `property_count`, but
+    not in the percentage mean/median or the threshold shares. `pct_defined_count` is the
+    number of parcels those percentage statistics are taken over; a category where it is
+    zero has NaN percentage statistics.
+
     Parameters:
     -----------
     df : pandas.DataFrame
@@ -190,35 +197,35 @@ def calculate_category_tax_summary(
     result_df[current_tax_col] = pd.to_numeric(result_df[current_tax_col], errors='coerce').fillna(0)
     result_df[new_tax_col] = pd.to_numeric(result_df[new_tax_col], errors='coerce').fillna(0)
     
-    # Calculate tax change if not already present
-    if 'tax_change' not in result_df.columns:
-        result_df['tax_change'] = result_df[new_tax_col] - result_df[current_tax_col]
-    
-    # Calculate per-parcel tax change percent
-    result_df['tax_change_pct'] = np.where(
-        result_df[current_tax_col] != 0,
-        (result_df['tax_change'] / result_df[current_tax_col]) * 100,
-        0
-    )
+    # Always recompute from the two tax columns: a caller's existing tax_change may
+    # belong to a different scenario or tax column than the ones passed here
+    result_df['tax_change'] = result_df[new_tax_col] - result_df[current_tax_col]
 
-    # Calculate flags for threshold statistics
-    result_df['increase_gt_threshold'] = result_df['tax_change_pct'] > pct_threshold
-    result_df['decrease_gt_threshold'] = result_df['tax_change_pct'] < -pct_threshold
+    # Per-parcel percent change, undefined (NaN) where the current bill is zero so those
+    # parcels drop out of the percentage mean/median instead of counting as 0%
+    current = result_df[current_tax_col]
+    result_df['tax_change_pct'] = result_df['tax_change'] / current.where(current != 0) * 100
+
+    # Threshold flags, undefined where the percentage is, so the shares are taken over
+    # parcels with a defined percent change
+    pct_defined = result_df['tax_change_pct'].notna()
+    result_df['increase_gt_threshold'] = (result_df['tax_change_pct'] > pct_threshold).where(pct_defined)
+    result_df['decrease_gt_threshold'] = (result_df['tax_change_pct'] < -pct_threshold).where(pct_defined)
 
     # Group by category and calculate summary statistics
     summary = result_df.groupby(category_col).agg({
         'tax_change': ['sum', 'count', 'mean', 'median'],
-        'tax_change_pct': ['mean', 'median'],
+        'tax_change_pct': ['count', 'mean', 'median'],
         current_tax_col: 'sum',
         new_tax_col: 'sum',
         'increase_gt_threshold': 'mean',
         'decrease_gt_threshold': 'mean'
     })
-    
+
     # Flatten column names
     summary.columns = [
         'total_tax_change_dollars', 'property_count', 'mean_tax_change', 'median_tax_change',
-        'mean_tax_change_pct', 'median_tax_change_pct',
+        'pct_defined_count', 'mean_tax_change_pct', 'median_tax_change_pct',
         'total_current_tax', 'total_new_tax',
         'pct_increase_gt_threshold', 'pct_decrease_gt_threshold'
     ]
@@ -282,17 +289,12 @@ def print_category_tax_summary(
         if col in display_df.columns:
             display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}")
     
-    # Format percentage columns
-    if 'total_tax_change_pct' in display_df.columns:
-        display_df['total_tax_change_pct'] = display_df['total_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
-    if 'mean_tax_change_pct' in display_df.columns:
-        display_df['mean_tax_change_pct'] = display_df['mean_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
-    if 'median_tax_change_pct' in display_df.columns:
-        display_df['median_tax_change_pct'] = display_df['median_tax_change_pct'].apply(lambda x: f"{x:.1f}%")
-    if 'pct_increase_gt_threshold' in display_df.columns:
-        display_df['pct_increase_gt_threshold'] = display_df['pct_increase_gt_threshold'].apply(lambda x: f"{x:.1f}%")
-    if 'pct_decrease_gt_threshold' in display_df.columns:
-        display_df['pct_decrease_gt_threshold'] = display_df['pct_decrease_gt_threshold'].apply(lambda x: f"{x:.1f}%")
+    # Format percentage columns (NaN = no parcel in the category has a nonzero current tax)
+    pct_cols = ['total_tax_change_pct', 'mean_tax_change_pct', 'median_tax_change_pct',
+                'pct_increase_gt_threshold', 'pct_decrease_gt_threshold']
+    for col in pct_cols:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: "n/a" if pd.isna(x) else f"{x:.1f}%")
     
     # Select and rename columns for display
     display_cols = [
@@ -329,11 +331,13 @@ def print_category_tax_summary(
         print(f"Median Percent Δ (median of medians): {overall_median_pct:.2f}%")
     # Print overall percent of parcels above and below threshold
     if 'pct_increase_gt_threshold' in summary_df.columns and 'pct_decrease_gt_threshold' in summary_df.columns:
-        total_count = summary_df['property_count'].sum()
-        gt_count = (summary_df['property_count'] * summary_df['pct_increase_gt_threshold'].astype(float) / 100).sum()
-        lt_count = (summary_df['property_count'] * summary_df['pct_decrease_gt_threshold'].astype(float) / 100).sum()
-        print(f"Percent of ALL parcels with tax increase > +{pct_threshold:.0f}%: {100 * gt_count / total_count:.2f}%")
-        print(f"Percent of ALL parcels with tax decrease < -{pct_threshold:.0f}%: {100 * lt_count / total_count:.2f}%")
+        # The shares are over parcels with a defined percent change
+        count_col = 'pct_defined_count' if 'pct_defined_count' in summary_df.columns else 'property_count'
+        total_count = summary_df[count_col].sum()
+        gt_count = (summary_df[count_col] * summary_df['pct_increase_gt_threshold'].astype(float).fillna(0) / 100).sum()
+        lt_count = (summary_df[count_col] * summary_df['pct_decrease_gt_threshold'].astype(float).fillna(0) / 100).sum()
+        print(f"Percent of parcels with a nonzero current tax and tax increase > +{pct_threshold:.0f}%: {100 * gt_count / total_count:.2f}%")
+        print(f"Percent of parcels with a nonzero current tax and tax decrease < -{pct_threshold:.0f}%: {100 * lt_count / total_count:.2f}%")
 
 def calculate_current_tax(
     df: pd.DataFrame,
