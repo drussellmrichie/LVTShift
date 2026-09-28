@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lvtshift"
+version = "0.1.0"
+description = "Land Value Tax policy-shift modeling toolkit (the lvt package)"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "geopandas>=0.13.0",
+    "pyarrow>=14.0.0",
+    "shapely>=2.0.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "requests>=2.31.0",
+    "census>=0.8.19",
+    "us>=3.2.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+# Imported lazily inside the functions that need them
+transit = ["osmnx", "networkx"]
+spatial = ["scipy"]
+
+[tool.setuptools]
+packages = ["lvt"]

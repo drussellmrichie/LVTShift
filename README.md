@@ -95,6 +95,7 @@ Manual setup, if you prefer:
 git clone https://github.com/gregmiller00/LVTShift.git
 cd LVTShift
 pip install -r requirements.txt
+pip install -e . --no-deps   # makes `lvt` importable from other folders and repos
 
 cp env.template .env
 # Add your Census API key (free at api.census.gov/data/key_signup.html)
@@ -309,6 +310,7 @@ Each city's methodology — which levies were modeled, how exemptions were treat
 git clone https://github.com/gregmiller00/LVTShift.git
 cd LVTShift
 pip install -r requirements.txt
+pip install -e . --no-deps   # makes `lvt` importable from other folders and repos
 
 cp env.template .env
 # Add your Census API key (free at api.census.gov/data/key_signup.html)
