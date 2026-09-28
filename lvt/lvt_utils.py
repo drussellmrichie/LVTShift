@@ -9,6 +9,27 @@ def _coerce_numeric(series: pd.Series, fill_value: float = 0.0) -> pd.Series:
     return pd.to_numeric(series, errors='coerce').fillna(fill_value)
 
 
+def pct_change_of_totals(new_total: pd.Series, current_total: pd.Series) -> pd.Series:
+    """
+    Percent change from ``current_total`` to ``new_total``, undefined (NaN) where the current
+    total is zero. A group that pays nothing today has no percent change: reporting 0% there
+    would show a group that starts paying tax as unaffected.
+
+    Parameters
+    ----------
+    new_total : pd.Series
+        Modeled tax per group.
+    current_total : pd.Series
+        Current tax per group.
+
+    Returns
+    -------
+    pd.Series
+        ``(new - current) / current * 100``, NaN where ``current_total == 0``.
+    """
+    return (new_total - current_total) / current_total.where(current_total != 0) * 100
+
+
 def _compute_adjusted_tax_components(
     df: pd.DataFrame,
     land_value_col: Optional[str] = None,
@@ -230,10 +251,8 @@ def calculate_category_tax_summary(
         'pct_increase_gt_threshold', 'pct_decrease_gt_threshold'
     ]
     
-    # Calculate percentage change in total tax by category (aggregate)
-    summary['total_tax_change_pct'] = ((summary['total_new_tax'] - summary['total_current_tax']) / 
-                                      summary['total_current_tax']) * 100
-    summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
+    # Percentage change in total tax by category; undefined for a category that pays nothing today
+    summary['total_tax_change_pct'] = pct_change_of_totals(summary['total_new_tax'], summary['total_current_tax'])
     
     # Convert proportions to percentages for display
     summary['pct_increase_gt_threshold'] = summary['pct_increase_gt_threshold'] * 100
@@ -1428,6 +1447,10 @@ def build_standard_export_frame(
 
     Emits warnings for non-standard property categories and if revenue
     neutrality deviates beyond 1%, but does not raise errors for either.
+    ``tax_change`` and ``tax_change_pct`` are recomputed from the two tax columns, never
+    copied from the caller. A parcel whose current or new tax is missing in ``df`` exports
+    0 for that tax (as before) but an undefined change, with a printed warning: a missing
+    bill is unknown, not zero, so neither a $0 change nor the whole new bill is right.
     Demographic columns (geoid, income, minority_pct, black_pct) are
     included as null when not present in df.
 
@@ -1451,9 +1474,12 @@ def build_standard_export_frame(
     new_tax_col : str
         Column holding the modeled LVT tax per parcel.
     tax_change_col : str
-        Column holding new_tax - current_tax.
+        Optional. The exported ``tax_change`` is always recomputed as
+        ``new_tax - current_tax``; if this column is present and disagrees, the count of
+        disagreeing parcels is printed as a warning.
     tax_change_pct_col : str
-        Column holding (tax_change / current_tax) * 100. Null where current_tax == 0.
+        Optional, checked the same way. The exported ``tax_change_pct`` is
+        ``tax_change / current_tax * 100``, null where current_tax == 0.
     taxable_land_col : str
         Column holding post-exemption taxable land value.
     taxable_improvement_col : str
@@ -1478,7 +1504,7 @@ def build_standard_export_frame(
     """
     required = [
         property_category_col, current_tax_col, new_tax_col,
-        tax_change_col, taxable_land_col, taxable_improvement_col,
+        taxable_land_col, taxable_improvement_col,
     ]
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -1490,20 +1516,32 @@ def build_standard_export_frame(
     out['city'] = city
     out['property_category'] = df[property_category_col].astype(str)
 
-    # Tax outcome
-    out['current_tax'] = pd.to_numeric(df[current_tax_col], errors='coerce').fillna(0.0)
-    out['new_tax'] = pd.to_numeric(df[new_tax_col], errors='coerce').fillna(0.0)
-    out['tax_change'] = pd.to_numeric(df[tax_change_col], errors='coerce').fillna(0.0)
+    # Tax outcome. The change is recomputed from the two bills rather than copied from the
+    # caller, and left undefined where either bill is missing (unknown, not zero)
+    current_raw = pd.to_numeric(df[current_tax_col], errors='coerce')
+    new_raw = pd.to_numeric(df[new_tax_col], errors='coerce')
+    out['current_tax'] = current_raw.fillna(0.0)
+    out['new_tax'] = new_raw.fillna(0.0)
+    out['tax_change'] = new_raw - current_raw
+    out['tax_change_pct'] = out['tax_change'] / current_raw.where(current_raw != 0) * 100
 
-    # tax_change_pct: use provided col if available, else derive; null where current_tax == 0
-    if tax_change_pct_col in df.columns:
-        out['tax_change_pct'] = pd.to_numeric(df[tax_change_pct_col], errors='coerce')
-    else:
-        nonzero = out['current_tax'] != 0
-        out['tax_change_pct'] = np.where(
-            nonzero, out['tax_change'] / out['current_tax'] * 100, np.nan
+    missing = current_raw.isna() | new_raw.isna()
+    if missing.any():
+        print(
+            f"  [warn] {city}: {int(missing.sum()):,} parcels have a missing current or new "
+            f"tax; they export that tax as 0 and tax_change / tax_change_pct as undefined"
         )
-    out.loc[out['current_tax'] == 0, 'tax_change_pct'] = np.nan
+    for given_col, derived, tol in ((tax_change_col, 'tax_change', 0.01),
+                                    (tax_change_pct_col, 'tax_change_pct', 0.01)):
+        if given_col in df.columns:
+            given = pd.to_numeric(df[given_col], errors='coerce')
+            both = given.notna() & out[derived].notna()
+            n_off = int(((given - out[derived]).abs() > tol)[both].sum())
+            if n_off:
+                print(
+                    f"  [warn] {city}: {n_off:,} parcels' {given_col} disagrees with "
+                    f"{new_tax_col} - {current_tax_col}; exporting the recomputed {derived}"
+                )
 
     # Value basis
     out['taxable_land_value'] = pd.to_numeric(df[taxable_land_col], errors='coerce').fillna(0.0)

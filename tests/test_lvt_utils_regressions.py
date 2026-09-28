@@ -15,10 +15,12 @@ from lvt.lvt_utils import (
     _apply_tax_credits,
     _compute_adjusted_tax_components,
     _solve_revenue_neutral_split_millage,
+    build_standard_export_frame,
     calculate_category_tax_summary,
     calculate_current_tax,
     model_full_building_abatement,
     model_split_rate_tax,
+    pct_change_of_totals,
 )
 
 
@@ -339,6 +341,19 @@ class TestCalculateCategoryTaxSummary:
         assert a["pct_increase_gt_threshold"] == pytest.approx(50.0)
         assert a["pct_decrease_gt_threshold"] == pytest.approx(50.0)
 
+    def test_category_paying_nothing_today_has_undefined_total_pct(self):
+        df = pd.DataFrame({
+            "PROPERTY_CATEGORY": ["A", "B", "B"],
+            "current_tax": [100.0, 0.0, 0.0],
+            "new_tax": [150.0, 10.0, 20.0],
+        })
+        summary = calculate_category_tax_summary(
+            df, category_col="PROPERTY_CATEGORY",
+            current_tax_col="current_tax", new_tax_col="new_tax",
+        ).set_index("PROPERTY_CATEGORY")
+        assert summary.loc["A", "total_tax_change_pct"] == pytest.approx(50.0)
+        assert np.isnan(summary.loc["B", "total_tax_change_pct"])
+
     def test_missing_category_column_returns_empty(self):
         df = pd.DataFrame({"current_tax": [1.0], "new_tax": [2.0]})
         summary = calculate_category_tax_summary(
@@ -346,3 +361,63 @@ class TestCalculateCategoryTaxSummary:
             current_tax_col="current_tax", new_tax_col="new_tax",
         )
         assert summary.empty
+
+
+# ── pct_change_of_totals ────────────────────────────────────────────────────
+
+class TestPctChangeOfTotals:
+
+    def test_zero_current_total_is_undefined_not_zero(self):
+        out = pct_change_of_totals(pd.Series([150.0, 30.0, 0.0]), pd.Series([100.0, 0.0, 0.0]))
+        assert out.iloc[0] == pytest.approx(50.0)
+        assert np.isnan(out.iloc[1]) and np.isnan(out.iloc[2])
+
+
+# ── build_standard_export_frame ─────────────────────────────────────────────
+
+def _export_input(**overrides) -> pd.DataFrame:
+    df = pd.DataFrame({
+        "PROPERTY_CATEGORY": ["Single Family Residential"] * 3,
+        "current_tax": [100.0, 200.0, 0.0],
+        "new_tax": [150.0, 150.0, 0.0],
+        "taxable_land_value": [1_000.0, 2_000.0, 0.0],
+        "taxable_improvement_value": [4_000.0, 3_000.0, 0.0],
+    })
+    for k, v in overrides.items():
+        df[k] = v
+    return df
+
+
+def _export(df: pd.DataFrame) -> pd.DataFrame:
+    return build_standard_export_frame(
+        df, city="testville", model_type="split_rate:4.0",
+        land_millage=10.0, improvement_millage=2.5,
+    )
+
+
+class TestBuildStandardExportFrame:
+    """The change columns are derived from the two bills, never copied from the caller."""
+
+    def test_tax_change_column_is_optional(self):
+        out = _export(_export_input())
+        assert list(out["tax_change"]) == [50.0, -50.0, 0.0]
+        assert list(out["tax_change_pct"][:2]) == [50.0, -25.0]
+        assert np.isnan(out["tax_change_pct"].iloc[2])
+
+    def test_stale_tax_change_is_recomputed_and_reported(self, capsys):
+        out = _export(_export_input(tax_change=[9_999.0, 9_999.0, 9_999.0],
+                                    tax_change_pct=[1.0, 1.0, np.nan]))
+        assert list(out["tax_change"]) == [50.0, -50.0, 0.0]
+        assert list(out["tax_change_pct"][:2]) == [50.0, -25.0]
+        printed = capsys.readouterr().out
+        assert "3 parcels' tax_change disagrees" in printed
+        assert "2 parcels' tax_change_pct disagrees" in printed
+
+    def test_missing_current_bill_leaves_change_undefined(self, capsys):
+        # A missing bill is unknown, not zero: neither a $0 change nor the whole new bill
+        out = _export(_export_input(current_tax=[100.0, np.nan, 0.0]))
+        assert out["current_tax"].iloc[1] == 0.0
+        assert np.isnan(out["tax_change"].iloc[1])
+        assert np.isnan(out["tax_change_pct"].iloc[1])
+        assert out["tax_change"].iloc[0] == 50.0
+        assert "1 parcels have a missing current or new tax" in capsys.readouterr().out

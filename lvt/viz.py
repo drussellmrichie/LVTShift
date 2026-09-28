@@ -860,12 +860,9 @@ def calculate_block_group_summary(
     }
     summary = summary.rename(columns=rename_dict)
     
-    # Calculate percentage change in total tax
-    summary['total_tax_change_pct'] = (
-        (summary['total_new_tax'] - summary['total_current_tax']) / 
-        summary['total_current_tax']
-    ) * 100
-    summary['total_tax_change_pct'] = summary['total_tax_change_pct'].replace([np.inf, -np.inf], 0).fillna(0)
+    # Percentage change in total tax; undefined for a group that pays nothing today
+    from lvt.lvt_utils import pct_change_of_totals
+    summary['total_tax_change_pct'] = pct_change_of_totals(summary['total_new_tax'], summary['total_current_tax'])
     
     # Reset index
     summary = summary.reset_index()
