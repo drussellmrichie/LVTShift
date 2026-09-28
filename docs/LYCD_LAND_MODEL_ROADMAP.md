@@ -285,7 +285,7 @@ sibling repo, with LVTShift consuming a per-parcel surface keyed on OPA `parcel_
 precedes any rate change: OPA's current methodology and flat rate, with only the land component
 re-valued by LYCD, rolled back to revenue neutrality. It uses the `lvt.reassessment` machinery
 and the shared LYCD construction, carries every parcel's existing exemptions forward under the
-rule documented in `cities/philadelphia/CLAUDE.md`, and then decomposes a stacked
+rule in "The rules the shared functions encode" below, and then decomposes a stacked
 reassess-then-split-rate shift into its two components. Its export is
 `analysis/data/philadelphia_lycd_reassessment_ty<YEAR>.csv`.
 
@@ -295,6 +295,68 @@ land component is re-split *inside* OPA's unchanged total (building = total − 
 statutory rate is untouched, so only exemptions that depend on the split -- abatements -- can
 move a bill. `lvt.philadelphia.reallocate_land_within_total` is that reform; it shares the
 exemption decomposition with `carry_forward_exemptions` and differs only in what it holds fixed.
+
+## The rules the shared functions encode
+
+The notebooks that call these live in `philly_land_tax_research`; the rules live here, beside
+the code in `lvt/philadelphia.py`.
+
+- **`carry_forward_exemptions`** is "same methodology, land valued differently". The Homestead
+  Exemption is re-applied as `min(cap, new total)`, building first, so a homestead whose new land
+  lifts it above the cap becomes taxable again (the "re-entering" cohort). Abatement and partial
+  relief carry forward in dollars, since a land reform leaves the building value unchanged; a
+  full institutional exemption is a rate, not an amount, and stays. The homestead keys off OPA's
+  per-parcel `homestead_exemption` dollars AND an exemption actually applied this vintage,
+  because the flag is current-vintage. Its guard is a reconstruction: OPA's own gross land fed
+  through the same rule must reproduce OPA's taxable total per parcel (floor 95%; the observed
+  rate is printed).
+- **`reallocate_land_within_total`** holds OPA's total fixed instead of OPA's building:
+  `alloc_land = min(new_land, total)`, `alloc_building = total − alloc_land`, rate untouched. It
+  shares `_decompose_exemptions` / `_apply_exemptions` / `_reconstruction_guard` with
+  `carry_forward_exemptions`, so the two cannot disagree about what a parcel's exemptions are.
+  With total and rate fixed, only split-dependent relief (`exemption_kind == 'building_share'`)
+  can move a bill; homestead, total-value relief and vacant parcels are bit-for-bit unchanged.
+  Two classification rules: relief that fits inside the building line but is split pro-rata
+  across land and building is a share of total value, not an abatement, so classify on
+  `exempt_land` net of homestead spill rather than on fit alone; and read the effect off
+  `.reform_change` (rule on new land minus rule on OPA's land), never against OPA's recorded
+  taxable total, or the reconstruction residual shows up as a tax change the reform cannot cause.
+- **`homestead_order`** (on both functions: `building_first` default, `land_first`,
+  `value_share`, `tax_share` + `homestead_rate_ratio`) decides which taxable line the Homestead
+  Exemption comes off. At one rate it is worth `cap × rate` whatever the line; under a split rate
+  the statutory building-first order (53 Pa.C.S. § 8583(c), which OPA's records follow) makes it
+  worth `cap × building rate`, which is why a shift that cuts rentals' bills can raise most
+  owner-occupants'. Taxable totals, `reform_change` and the guard are identical under every
+  order, so the order is invisible until two rates are applied. Every order but the default needs
+  § 8583(c) amended; `value_share` is the neutral one (the exclusion cuts a bill by
+  `cap / value` at any pair of rates).
+- **`paint_land_surface`** imports an external land **rate**, never a dollar value, and
+  multiplies it by this repo's own `dor_area_sqft`, which keeps the two repos' area conventions
+  decoupled. Parcels outside the AVM universe take their nearest matched neighbours' median rate
+  and are flagged `land_surface_source == 'knn'`; the improved cap is LYCD's, so a swap changes
+  the rate and nothing else. Given `support=` (the sibling repo's `land_surface_support.json`),
+  it does three more things. The KNN fill re-sizes each neighbour's rate to the subject's own lot
+  (`_knn_resized_rate_fill`) and draws only on in-support neighbours, because a neighbour's rate
+  describes a lot of the neighbour's size. Every parcel whose own or painted lot exceeds the
+  support edge is flagged `land_beyond_support`. And a flagged VACANT parcel is carried at
+  `opa_gross_land` (`opa_beyond_support`); improved parcels are left alone because the
+  market-value cap already bounds them. `uncap_bare_land` applies the same rule to its wider
+  definition of bare (no building value, whatever the category) through `beyond_support`.
+- **`condo_unit_areas`** fixes the condo defect in the table above on the painted path: each
+  unit's area becomes the sibling repo's `condo_unit_share` (livable-area share, summing to 1
+  per building; 0 for accessory units) times this repo's PIN area for the master lot. It imports
+  a share, not an area, for the same reason `paint_land_surface` imports a rate. Guard: a
+  building's unit areas may not sum past its lot.
+- **`corrected_lot_areas`** imports the sibling repo's `land_area_sqft` where its land roll
+  replaced OPA's recorded area (`land_area_source == 'pwd_dor'`: OPA's area more than 2x both
+  the DOR and PWD polygons), for parcels whose `area_source` is still `opa_total_area`. It
+  imports an area, unlike the two above, because this repo has no PWD polygons to re-derive it;
+  both repos measure true ground square feet. Guard: no flagged parcel may leave with an area
+  more than 2x the sibling repo's.
+- **`compute_lycd_land_values`'s prototype parameters** default to base behaviour:
+  `zone_group_col` (zone medians per (group, GMA level) cell) and `land_pct_improved` as a
+  per-parcel Series (an FHFA tract land share). The Philadelphia-specific inputs for both stay in
+  the calling notebook.
 
 ## Against the draft ordinance
 
