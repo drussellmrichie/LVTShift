@@ -7,6 +7,9 @@ TY2025 rate reallocation — the combined rate stayed 1.3998% so nothing looked 
 City/School split had moved and the cross-check was quietly validating against the wrong
 denominator. Keep them here and import.
 
+Scripts, notebooks and analysis folders cited below that are not in LVTShift are in the sibling
+Philadelphia research repo, `philly_land_tax_research`, which imports this module.
+
 Rate and revenue sources are cited per year. The combined rate has been 1.3998% throughout;
 what changes is how it splits, which only affects the cross-check, not the revenue-neutral
 model itself (that runs on the combined levy).
@@ -311,6 +314,7 @@ def expand_abatement_cohort(
         raise FileNotFoundError(
             f"{cls_path} not found. Build it with:\n"
             f"    python scripts/build_philadelphia_abatement_classification.py --year {year}\n"
+            "(run from the sibling philly_land_tax_research repo, where that script lives). "
             "This is the full abatement-schedule classification (graduated residential, 90% "
             "commercial, rehab) that the zero-building test alone cannot see -- see "
             "cities/philadelphia/CLAUDE.md, \"The zero-building test finds only full abatements\"."

@@ -119,8 +119,6 @@ analysis/data/
 analysis/reports/
 analysis/maps/
 
-# analysis/ownership/ scripts are tracked deliberately (resolved 2026-08-17): the .py files
-# are committed, their results/ outputs fall under the *.csv / *.json rules below.
 
 # Built report artifacts. The .tex prose and the generator are tracked; everything the
 # generator or LaTeX produces is not — regenerate with:

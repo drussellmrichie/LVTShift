@@ -237,14 +237,22 @@ Key functions:
 - `match_to_census_blockgroups(gdf, census_gdf)` → spatial join parcels to block groups
 - Auto-detects large counties (Cook, LA, Harris, …) for chunked fetching
 
-### Philadelphia — see `cities/philadelphia/CLAUDE.md`
+### Philadelphia — see `cities/philadelphia/CLAUDE.md`, and the research repo
 
-Philadelphia's four paradigm sections (OPA/Carto data patterns, the wage-tax swap, LVT + UBI,
-and the single-tax static ledger) live in a **directory-scoped `CLAUDE.md`** at
-`cities/philadelphia/CLAUDE.md`, loaded when working in that subtree rather than on every
-session for every city. Read it before touching any Philadelphia notebook, cache, or export —
-it holds the OPA classification overrides, the assessment-vintage and lot-area traps, the
-LYCD join, the baseline-vs-rent-surface rule, and the ledger's kappa/G conventions.
+This repo keeps Philadelphia's OPA standard model (`cities/philadelphia/model.ipynb`), its cache
+builder and `lvt/philadelphia.py`; the OPA/Carto data patterns they rest on (classification
+overrides, assessment-vintage and lot-area traps, abatement and homestead rules, the parcel
+cache) are in the **directory-scoped** `cities/philadelphia/CLAUDE.md`. Read it before touching
+any Philadelphia notebook, cache or export.
+
+The Philadelphia research program moved on 2026-09-28 to the private sibling repo
+`Progress-and-Poverty-Institute/philly_land_tax_research` (`../philly_land_tax_research`), with
+its history: the LYCD, post-abatement, reassessment, wage-tax, LVT + UBI, single-tax and OCD
+notebooks; the ownership, deck, one-pager, web-map and opportunity-site work; the land-surface
+and ownership papers; the age-by-tenure analysis; and the dated audits. It imports `lvt` from
+this checkout through an editable install and reaches the gitignored data here through
+junctions, so **a change to `lvt/` or to the shared data affects it**. A path cited in this
+repo that is not here is in that one.
 
 ## Notebooks
 
@@ -261,9 +269,12 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
 
 ## Documentation
 
-- `cities/philadelphia/CLAUDE.md` — **directory-scoped**: all four Philadelphia paradigms
-  (OPA/Carto patterns, wage-tax swap, LVT + UBI, single-tax ledger). Loaded when working in
-  that subtree; read it explicitly if you are reasoning about Philadelphia from elsewhere.
+- `cities/philadelphia/CLAUDE.md` — **directory-scoped**: the OPA/Carto data patterns behind
+  Philadelphia's standard model and `lvt/philadelphia.py`. Loaded when working in that subtree;
+  read it explicitly if you are reasoning about Philadelphia from elsewhere.
+- `../philly_land_tax_research` — the Philadelphia research repo (see the Philadelphia section
+  above). Its `CLAUDE.md` indexes its papers, the vacant-land valuation study, the web-map docs
+  and the dated audits.
 - `docs/LVT_MODELING_GUIDE.md` — step-by-step guide for adding a new city
 - `docs/WAGE_TAX_SWAP_GUIDE.md` — methodology for the wage-tax-for-land-tax swap paradigm
 - `docs/LVT_UBI_GUIDE.md` — methodology for the LVT + UBI (full land-rent capture) paradigm
@@ -273,23 +284,10 @@ Located in `cities/<city>/model.ipynb`. Each follows the 7-section template in `
   behind the single-tax model's `kappa` bounds, and the mapping from what the literature
   measures to what the ledger needs
 - `docs/WASHINGTON_DC_VACANT_LAND.md` — why DC's Class 3/4 regime reaches idle buildings, not idle land
-- `docs/VACANT_LAND_VALUATION.md` — sales-based test of the OPA vs LYCD land surfaces on vacant
-  land: LYCD over-values it, OPA under-values it, and both are severely dispersed
 - `docs/LYCD_LAND_MODEL_ROADMAP.md` — what LYCD is (the allocation method), its defects in order
   of consequence, the tunings possible inside the method, and what an assessor-grade land model
   would look like; also documents the LYCD-land reassessment notebook built alongside it
-- `analysis/lycd_reassessment/philadelphia/paper/` — PPI report on what a zone-rate land
-  allocation does to bills under the draft land-assessment ordinance (re-split inside OPA's
-  total vs. revaluation), and how both land surfaces measure against the ordinance's own
-  uniformity and accuracy tests, and whether a land-value tax on each surface would be
-  progressive by race and income. The sales-based surface is the one `philly_open_avmkit`'s land
-  roll certifies (asserted by the generator). Generator-driven: `generate_paper_assets.py` is the
-  only source of numbers; `Report.tex` carries no literals
 - `docs/LVT_MODELING_GUIDE_ARCHIVE.md` — legacy modeling guide (pre-refactor, kept for reference)
-- `analysis/audits/<topic>_audit_<YYYY-MM-DD>.md` — dated, point-in-time audit findings. Never edit
-  a prior audit; a new pass writes a new dated file so the two can be compared. The single-tax
-  ledger has two: a 2026-08-26 self-check and the 2026-08-27 independent pass that re-verified
-  it (all findings from both are applied).
 
 ## Code Style
 

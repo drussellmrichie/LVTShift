@@ -6,7 +6,7 @@ another). This one taxes **100% of annual land rent**, leaves the building tax e
 today, holds the taxing bodies harmless on the land portion of their current revenue, and pays the
 residual out as an equal per-capita dividend to residents.
 
-Worked example: `cities/philadelphia/model_lvt_ubi.ipynb`. Module: `lvt/ubi_utils.py`. Report
+Worked example: `cities/philadelphia/model_lvt_ubi.ipynb`, in the sibling `philly_land_tax_research` repo. Module: `lvt/ubi_utils.py`. Report
 function: `lvt.viz.create_lvt_ubi_report`. Unit tests: `tests/test_ubi_utils.py`.
 
 ## Why this needs a different approach

@@ -101,7 +101,8 @@ For overlapping taxing districts (county / municipality / school), use `model_mu
 
 The "Least You Can Do" method assigns every parcel in a zone the *same* land rate
 per square foot (a zone-median rate applied to lot area) rather than estimating a
-parcel-specific land value. See `analysis/political/philadelphia_lycd.md` for the
+parcel-specific land value. See `analysis/political/philadelphia_lycd.md` (in the sibling
+`philly_land_tax_research` repo) for the
 algorithm and the GMA hierarchy; this note records *why* the uniform-rate
 assumption is defensible, which the explainers do not.
 
