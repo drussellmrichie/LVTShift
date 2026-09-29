@@ -131,11 +131,14 @@ class ZeroBuildingSplit:
     homestead_zeroed: "pd.Series"
     no_exemption: "pd.Series"
     homestead_claim_rate: float
+    total_value_relief: "pd.Series | None" = None   # relief against total value: not abated
 
     def describe(self) -> str:
+        tvr = 0 if self.total_value_relief is None else int(self.total_value_relief.sum())
         return (f"zero-building line: {int(self.abated.sum()):,} abated | "
                 f"{int(self.homestead_zeroed.sum()):,} homestead-zeroed "
                 f"({self.homestead_claim_rate:.1%} confirmed by OPA's homestead flag) | "
+                f"{tvr:,} total-value relief (not abated) | "
                 f"{int(self.no_exemption.sum()):,} genuinely $0 improvement")
 
 
@@ -165,6 +168,18 @@ def split_zero_building_parcels(
       it keeps its exemption under the reform, so its $0 building line is correct as-is.
     - `exempt_total == 0` -> nothing is exempted and the improvement really is worth $0.
       Left as Override 1 classified it.
+
+    Within the first group, relief that reaches the LAND beyond what the homestead spills there
+    is relief against total value, not a construction abatement: an abatement exempts the
+    improvement only, so the one land exemption an abated parcel can show is homestead spill
+    (the same test `reallocate_land_within_total` uses to tell `total_share` from
+    `building_share`). On TY2026 this is ~2,600 mostly owner-occupied homes whose relief has run
+    since 2015 or earlier and steps up at every reassessment, like an assessment-increase cap. Its
+    program is unidentified (it is not LOOP, which Revenue applies at billing and OPA does not
+    record; see `cities/philadelphia/CLAUDE.md`), but no 10-year abatement runs that long, so it
+    continues after today's abatements expire. Calling these parcels abated strips that relief
+    from the post-abatement baseline. They are returned as `total_value_relief`, restored to
+    their OPA category, and keep their exemption.
 
     Pass `homestead_exemption` from `tax_year_params(year)`, not a literal: the amount has
     moved four times ($30K -> $40K -> $45K -> $80K -> $100K) and using the wrong year's cap
@@ -203,13 +218,24 @@ def split_zero_building_parcels(
         & (~codes.isin(set(genuine_vacant_codes)))
     )
 
-    abated = zero_building & (exempt_total > homestead_exemption)
+    # Non-homestead relief that reached the land line: relief against total value.
+    hs_amt = (_num("homestead_exemption").clip(lower=0) if "homestead_exemption" in gdf.columns
+              else pd.Series(0.0, index=gdf.index))
+    hs_active = (hs_amt > 0) & (exempt_total > 0)
+    other = (exempt_total - hs_amt.where(hs_active, 0.0)).clip(lower=0)
+    gross_bldg = _num("taxable_building") + _num("exempt_building")
+    hs_spill = (hs_amt - (gross_bldg - other).clip(lower=0)).clip(lower=0).where(hs_active, 0.0)
+    total_value_relief = (zero_building & (exempt_total > homestead_exemption)
+                          & ((_num("exempt_land") - hs_spill).clip(lower=0) > 1.0))
+
+    abated = zero_building & (exempt_total > homestead_exemption) & ~total_value_relief
     homestead_zeroed = zero_building & (exempt_total > 0) & (exempt_total <= homestead_exemption)
     no_exemption = zero_building & (exempt_total <= 0)
 
     out = category.copy()
     out[abated] = "Abated / Construction Exemption"
     out[homestead_zeroed] = codes[homestead_zeroed].map(category_map).fillna("Other")
+    out[total_value_relief] = codes[total_value_relief].map(category_map).fillna("Other")
 
     # The split is exemption arithmetic, so check it against OPA's own homestead flag --
     # the column that would move if the split were separating the wrong two populations.
@@ -225,7 +251,7 @@ def split_zero_building_parcels(
                 "check tax_year_params(year).homestead_exemption against the assessment vintage."
             )
 
-    return ZeroBuildingSplit(out, abated, homestead_zeroed, no_exemption, claim_rate)
+    return ZeroBuildingSplit(out, abated, homestead_zeroed, no_exemption, claim_rate, total_value_relief)
 
 
 ABATEMENT_SCHEDULES = (
@@ -243,6 +269,7 @@ class AbatementCohortExpansion:
     missed: "pd.Series"              # classified abatement the zero-building test alone missed
     classified: "pd.Series"          # every parcel scripts/build_philadelphia_abatement_classification.py calls an abatement
     restored_building: "pd.Series"   # gross (pre-exemption) building value for every row
+    released: "pd.Series | None" = None   # zero-building parcels the classification calls relief, not abatement
 
     def describe(self) -> str:
         return (
@@ -260,6 +287,7 @@ def expand_abatement_cohort(
     year: int,
     *,
     data_dir: str | Path = "data",
+    category_map: "dict | None" = None,
 ) -> AbatementCohortExpansion:
     """Add the abatement schedules `split_zero_building_parcels` cannot see to the abated cohort.
 
@@ -302,6 +330,12 @@ def expand_abatement_cohort(
     data_dir : str or Path
         Directory holding the classification parquet (default `'data'`, i.e.
         `cities/philadelphia/data` when run from that directory).
+    category_map : dict, optional
+        OPA `category_code` -> category name. When given, a zero-building parcel the
+        classification labels `non_abatement_relief` (relief present since the start of the
+        history, or rising with assessments -- never a 10-year abatement) is released from the
+        abated cohort and restored to its OPA category, so it keeps its relief. Without it the
+        cohort is returned as before.
 
     Returns
     -------
@@ -328,9 +362,14 @@ def expand_abatement_cohort(
     classified = schedule_type.isin(ABATEMENT_SCHEDULES)
     missed = classified & ~abated_mask
 
+    released = pd.Series(False, index=abated_mask.index)
+    if category_map is not None:
+        released = abated_mask & schedule_type.eq("non_abatement_relief").to_numpy()
     out_category = category.copy()
     out_category[missed] = "Abated / Construction Exemption"
-    out_abated = abated_mask | missed
+    codes = gdf["category_code"].astype(str)
+    out_category[released] = codes[released].map(category_map or {}).fillna("Other")
+    out_abated = (abated_mask & ~released) | missed
 
     # Guard: this must read the SAME quantity that broke -- whether a classified-abatement
     # parcel actually ends up in the abated category -- not a reconstruction of it.
@@ -349,7 +388,7 @@ def expand_abatement_cohort(
     implied_bldg = (_num("market_value") - _num("taxable_land")).clip(lower=0)
     restored = gross_bldg.where(gross_bldg > 0, implied_bldg)
 
-    return AbatementCohortExpansion(out_category, out_abated, missed, classified, restored)
+    return AbatementCohortExpansion(out_category, out_abated, missed, classified, restored, released)
 
 
 def parcel_cache_path(year: int, data_dir: str | Path = "data") -> Path:
@@ -1199,7 +1238,8 @@ def _check_homestead_order(homestead_order: str, rate_ratio) -> None:
 
 
 def _apply_exemptions(new_land, bldg, other_exempt, parts: _ExemptionParts, homestead_cap: float,
-                      *, homestead_order: str = "building_first", rate_ratio: "float | None" = None):
+                      *, homestead_order: str = "building_first", rate_ratio: "float | None" = None,
+                      value_share_relief=None):
     """Building-first application of the dollar exemptions, then the homestead at min(cap, value).
 
     `other_exempt` is passed explicitly (rather than read from `parts`) because the two reform
@@ -1223,6 +1263,11 @@ def _apply_exemptions(new_land, bldg, other_exempt, parts: _ExemptionParts, home
 
     Every order other than the statutory one needs Sec. 8583(c) amended. Whatever one line cannot
     absorb falls on the other, so the amount exempted is the same under every order.
+
+    `value_share_relief` (boolean, aligned) takes those rows' non-homestead dollars off land and
+    building in proportion to the two lines' values instead of building-first -- the treatment
+    `reallocate_land_within_total(relief_order="value_share")` gives relief against total value.
+    The dollars exempted are the same; only their line moves.
     """
     import numpy as np
     import pandas as pd
@@ -1232,6 +1277,14 @@ def _apply_exemptions(new_land, bldg, other_exempt, parts: _ExemptionParts, home
     b1 = (bldg - other_exempt).clip(lower=0)
     spill = (other_exempt - bldg).clip(lower=0)
     l1 = (new_land - spill).clip(lower=0)
+    if value_share_relief is not None and np.any(value_share_relief):
+        o, b, l = (np.asarray(x, float) for x in (other_exempt, bldg, new_land))
+        tot = b + l
+        want = o * np.divide(l, tot, out=np.zeros_like(o), where=tot > 0)
+        from_land = np.clip(want, np.clip(o - b, 0, None), np.minimum(o, l))
+        m = np.asarray(value_share_relief, bool)
+        l1 = pd.Series(np.where(m, np.clip(l - from_land, 0, None), np.asarray(l1, float)), index=idx)
+        b1 = pd.Series(np.where(m, np.clip(b - (o - from_land), 0, None), np.asarray(b1, float)), index=idx)
     hs_ex = pd.Series(np.where(parts.homestead_active, np.minimum(homestead_cap, b1 + l1), 0.0), index=idx)
     if homestead_order == "building_first":
         b2 = (b1 - hs_ex).clip(lower=0)
@@ -1545,6 +1598,8 @@ def reallocate_land_within_total(
     reconstruction_floor: float = 0.95,
     homestead_order: str = "building_first",
     homestead_rate_ratio: "float | None" = None,
+    total_value_relief=None,
+    relief_order: str = "building_first",
 ) -> LandReallocation:
     """Re-split OPA's own total assessment into a new land component and a residual building.
 
@@ -1628,6 +1683,19 @@ def reallocate_land_within_total(
         uses the statutory order, because it checks the rule against OPA's records.
     homestead_rate_ratio : float, optional
         The land/building rate ratio; required for "tax_share".
+    total_value_relief : boolean array-like, optional
+        Parcels whose non-homestead relief is relief against total value even though its
+        dollars fit inside the building line -- e.g. the long-running, assessment-cap-like relief
+        the abatement classification labels `non_abatement_relief`. Forced to
+        `total_share`, so the relief is carried in dollars rather than as a share of a building
+        line that shrinks when the land component rises.
+    relief_order : str, default "building_first"
+        Which line `total_share` dollars come off in the reform: "building_first" (how OPA
+        records them, and the guard's rule) or "value_share" (in proportion to the two lines'
+        values, the treatment `homestead_order="value_share"` gives the homestead). Under a
+        split rate the building-first order taxes a relieved parcel's re-estimated land at the
+        land rate while its relief is spent on the building; how such relief should split is not
+        set by statute, like the homestead's.
 
     Returns
     -------
@@ -1637,8 +1705,13 @@ def reallocate_land_within_total(
     import pandas as pd
 
     _check_homestead_order(homestead_order, homestead_rate_ratio)
+    if relief_order not in ("building_first", "value_share"):
+        raise ValueError(f"relief_order must be 'building_first' or 'value_share', not {relief_order!r}")
     p = _decompose_exemptions(gdf, homestead_col, match_tolerance)
     gross_total = p.gross_land + p.gross_building
+    forced_total = pd.Series(
+        np.zeros(len(gdf), bool) if total_value_relief is None else np.asarray(total_value_relief, bool),
+        index=p.gross_land.index)
 
     # An abatement exempts the improvement, so it carries as a share of the building line; a
     # partial institutional exemption is a share of total value, so it carries in dollars.
@@ -1662,6 +1735,7 @@ def reallocate_land_within_total(
         (p.other_exempt > match_tolerance)
         & (p.other_exempt <= p.gross_building + match_tolerance)
         & (non_homestead_exempt_land <= match_tolerance)
+        & ~forced_total
     )
     share = pd.Series(
         np.where(p.gross_building > 0, p.other_exempt / p.gross_building.where(p.gross_building > 0, 1.0), 0.0),
@@ -1682,9 +1756,11 @@ def reallocate_land_within_total(
     proposed = pd.to_numeric(gdf[new_land_col], errors="coerce").fillna(0.0).clip(lower=0)
     alloc_land = np.minimum(proposed, gross_total)
     alloc_building = (gross_total - alloc_land).clip(lower=0)
+    is_total_share = (p.other_exempt > match_tolerance) & ~is_building_share & ~p.institutional
     new_land_out, new_bldg_out = _apply_exemptions(
         alloc_land, alloc_building, _exempt_dollars(alloc_building), p, homestead_cap,
-        homestead_order=homestead_order, rate_ratio=homestead_rate_ratio)
+        homestead_order=homestead_order, rate_ratio=homestead_rate_ratio,
+        value_share_relief=is_total_share if relief_order == "value_share" else None)
     new_total = new_land_out + new_bldg_out
 
     kind = pd.Series("none", index=p.gross_land.index, dtype=object)
@@ -1720,6 +1796,8 @@ def reallocate_land_within_total(
         "reconstruction_mismatch_dollars": mismatch_dollars,
         "homestead_cap": float(homestead_cap),
         "homestead_order": homestead_order,
+        "relief_order": relief_order,
+        "n_total_value_relief_forced": int((forced_total & (p.other_exempt > match_tolerance)).sum()),
     }
     return LandReallocation(
         alloc_land, alloc_building, new_land_out, new_bldg_out, new_total, rec_total, kind,

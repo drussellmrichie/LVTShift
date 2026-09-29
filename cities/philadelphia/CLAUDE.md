@@ -103,6 +103,18 @@ exempt share of building value across the `assessments` history (2015 on):
   reassessment and rarely follows a permit. Its program is unidentified, which sits awkwardly
   with the LOOP note above; do not label it LOOP without a source.
 
+**Relief that reaches the land is not an abatement either.** The classification's population is
+the `building_share` kind only, so a zero-building parcel whose non-homestead relief spills onto
+land (the `total_share` kind) is never classified, and the zero-building test used to sweep it into
+the abated cohort: on TY2026, ~2,600 mostly owner-occupied homes with relief since 2015 or earlier
+that steps up at each reassessment. An abatement exempts the improvement only, so
+`split_zero_building_parcels` now returns these as `total_value_relief`, restored to their OPA
+category; `expand_abatement_cohort(category_map=...)` also releases zero-building parcels the
+classification labels `non_abatement_relief`. Under a split rate, how such relief divides between
+land and building is unset by statute, like the homestead's: `reallocate_land_within_total` takes
+`total_value_relief` (force it to `total_share`, carried in dollars) and `relief_order`
+(`building_first`, the default and OPA's recording, or `value_share`, pro rata).
+
 **Don't use the homestead flag to find owner-occupants among abated parcels.** A property
 with a 10-year residential abatement isn't eligible for the Homestead Exemption until the
 abatement ends (phila.gov), so the flag is empty for exactly those parcels. Use the ownership
