@@ -27,6 +27,7 @@ __all__ = ["TaxYear", "tax_year_params", "parcel_cache_path", "SUPPORTED_TAX_YEA
            "ExemptionCarryForward", "carry_forward_exemptions",
            "compute_residual_building_value",
            "LandReallocation", "reallocate_land_within_total", "uncap_bare_land", "LARGE_TRACT_TREATMENTS",
+           "LargeTractRelevel", "relevel_beyond_support", "large_lot_band_factor", "LARGE_LOT_BANDS", "ACRE_SQFT",
            "HOMESTEAD_ORDERS",
            "LandSurfaceResult", "paint_land_surface",
            "PHILADELPHIA_LAND_SQFT", "VACANT_CATEGORY_CODES",
@@ -1081,7 +1082,8 @@ def paint_land_surface(
     (3) A flagged VACANT parcel whose OPA land value is its whole market value is carried at
     `carry_col` (OPA's own gross land value) and marked `source == 'opa_beyond_support'`: an improved parcel's land is capped at its total,
     so an extrapolated rate cannot add value to the base, but a vacant lot is taken whole and
-    nothing bounds it (audit 2026-09-21, finding 3). Without
+    nothing bounds it (audit 2026-09-21, finding 3). The rate is kept on every flagged parcel, so a
+    reform step can still rescale it (`relevel_beyond_support`) instead of taking the carry. Without
     `support` the function behaves exactly as before, for surfaces that publish no edge.
 
     Parameters
@@ -1805,12 +1807,95 @@ def reallocate_land_within_total(
     )
 
 
-LARGE_TRACT_TREATMENTS = ("carry_opa", "opa_relevelled", "surface")
+ACRE_SQFT = 43_560.0
+LARGE_LOT_BANDS = ("edge to 1 acre", "1 acre and over")   # philly_open_avmkit's band names
+
+
+def large_lot_band_factor(area, band_factors: dict, edge_sqft: float, acre_sqft: float = ACRE_SQFT):
+    """A surface's held-out relevel factor for each lot, by lot-size band beyond the support edge.
+
+    Bands as philly_open_avmkit's `check_large_lot_relevel.py` cuts them: `edge < area <= acre` is
+    "edge to 1 acre", `area > acre` is "1 acre and over". `band_factors` maps those names to the
+    surface's median ratio to price on held-out sales in the band. Returns a float array, NaN at or
+    inside the edge (and where the area is missing), so a caller cannot mistake "no factor" for 1.
+    """
+    import numpy as np
+
+    missing = [b for b in LARGE_LOT_BANDS if b not in band_factors]
+    if missing:
+        raise KeyError(f"band_factors lacks {missing}; it has {sorted(band_factors)}")
+    a = np.asarray(area, dtype=float)
+    out = np.full(a.shape, np.nan)
+    out[(a > edge_sqft) & (a <= acre_sqft)] = float(band_factors[LARGE_LOT_BANDS[0]])
+    out[a > acre_sqft] = float(band_factors[LARGE_LOT_BANDS[1]])
+    return out
+
+
+@dataclass(frozen=True)
+class LargeTractRelevel:
+    """Output of `relevel_beyond_support`. Series aligned to the input frame's index."""
+    land: "pd.Series"         # the land column for the re-split: relevelled beyond the edge, else unchanged
+    relevelled: "pd.Series"   # which parcels were relevelled
+    diagnostics: dict
+
+
+def relevel_beyond_support(frame, *, land_col: str, uncarried_col: str, beyond_support,
+                           relevel_factor) -> LargeTractRelevel:
+    """The land a sales surface supports on lots larger than its sales can test: its own value there,
+    divided by its measured error on the large lots that did sell.
+
+    A surface's rate past its support edge is an extrapolation from comparables a tenth the size or
+    smaller, and on the held-out sales beyond the edge it errs by a measurable amount in each lot-size
+    band (philly_open_avmkit measures S5 at about 1.09x price from the edge to an acre and 1.83x
+    above). Dividing by that factor puts the surface on level there without replacing it: the value
+    is still the surface's own comparables, rescaled, which is what `large_tracts="relevelled"` in
+    `uncap_bare_land` then takes whole on a bare lot.
+
+    The factor applies to the RATE, before any cap: `uncarried_col` is the surface's own value (rate
+    x lot area, never capped at the parcel's total, never replaced by OPA's), and the re-split
+    (`reallocate_land_within_total`) caps the result afterwards on a parcel with a building. Dividing
+    an already-capped value instead would take a parcel whose relevelled land still exceeds its total
+    below the total, understating it.
+
+    Parcels not flagged `beyond_support` keep `land_col` unchanged. A flagged parcel with no usable
+    factor (NaN or <= 0) or no uncarried value raises, naming the count: a gap in the factors must not
+    silently fall back to the extrapolated value.
+    """
+    import numpy as np
+    import pandas as pd
+
+    beyond = np.asarray(beyond_support, dtype=bool)
+    factor = np.asarray(relevel_factor, dtype=float)
+    base = pd.to_numeric(frame[land_col], errors="coerce").to_numpy(dtype=float)
+    uncarried = pd.to_numeric(frame[uncarried_col], errors="coerce").to_numpy(dtype=float)
+    if not (len(beyond) == len(factor) == len(frame)):
+        raise ValueError("beyond_support and relevel_factor must align with frame")
+    no_factor = beyond & ~(np.isfinite(factor) & (factor > 0))
+    if no_factor.any():
+        raise ValueError(f"{int(no_factor.sum()):,} parcels beyond the support edge have no relevel factor")
+    no_value = beyond & ~np.isfinite(uncarried)
+    if no_value.any():
+        raise ValueError(f"{int(no_value.sum()):,} parcels beyond the support edge have no {uncarried_col}")
+    land = base.copy()
+    land[beyond] = np.clip(uncarried[beyond], 0, None) / factor[beyond]
+    factors, counts = np.unique(np.round(factor[beyond], 6), return_counts=True)
+    diagnostics = {
+        "n_beyond_support": int(beyond.sum()),
+        "land_col_beyond": float(np.nansum(base[beyond])),
+        "uncarried_beyond": float(uncarried[beyond].sum()),
+        "relevelled_beyond": float(land[beyond].sum()),
+        "parcels_by_factor": {float(f): int(n) for f, n in zip(factors, counts)},
+    }
+    return LargeTractRelevel(pd.Series(land, index=frame.index), pd.Series(beyond, index=frame.index), diagnostics)
+
+
+# The headline reading first: the one-pager and its walkthrough list the readings in this order.
+LARGE_TRACT_TREATMENTS = ("relevelled", "carry_opa", "opa_relevelled", "surface")
 
 
 def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str = "s5_land", *,
                     beyond_support=None, large_tracts: str = "carry_opa", uncarried_land=None,
-                    opa_level: "float | None" = None):
+                    opa_level: "float | None" = None, keep_opa=None):
     """Take the sales-based land value whole on parcels that carry no building -- where the
     sales can speak to a lot that size.
 
@@ -1838,12 +1923,17 @@ def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str =
     nothing bounds it. `beyond_support` is that flag as a boolean array, and `large_tracts` says
     what a flagged bare lot is worth:
 
-    - ``carry_opa`` (the default): OPA's own value, so the lot's bill moves with the rate alone.
-      Conservative, not correct -- OPA runs low on the large tracts that do sell.
+    - ``relevelled``: `new_land_col` taken whole, where the caller has built that column with
+      `relevel_beyond_support` (the surface divided by its measured error in the lot's size band),
+      except the tracts `keep_opa` marks, which keep OPA's value: land whose use is restricted (a
+      rail corridor, a port terminal, parkland), where a market-rate estimate prices a use the lot
+      cannot have. The Council one-pager's reading, and the same column it gives built parcels.
+    - ``carry_opa`` (the library default, so a caller that names no treatment keeps the old
+      behaviour): OPA's own value, so the lot's bill moves with the rate alone. OPA runs low on the
+      large tracts that do sell.
     - ``opa_relevelled``: OPA's value divided by `opa_level`, its measured median ratio to price
-      on still-vacant sales beyond the edge. The other end of the range.
-    - ``surface``: `uncarried_land`, the extrapolated rate taken whole. Reported so the size of
-      the question stays visible.
+      on still-vacant sales beyond the edge.
+    - ``surface``: `uncarried_land`, the extrapolated rate taken whole, which runs high.
 
     With `beyond_support=None` every bare lot takes `new_land_col` whole, for a surface that
     publishes no edge.
@@ -1865,7 +1955,13 @@ def uncap_bare_land(alloc: LandReallocation, frame, taxable, new_land_col: str =
     whole = frame[new_land_col].to_numpy(dtype=float).copy()
     if beyond_support is not None:
         beyond = bare & np.asarray(beyond_support, dtype=bool)
-        if large_tracts == "carry_opa":
+        if large_tracts == "relevelled":
+            if keep_opa is None:
+                raise ValueError("large_tracts='relevelled' needs keep_opa, the use-restricted tracts that "
+                                 "keep OPA's value (all False if there are none)")
+            kept = beyond & np.asarray(keep_opa, dtype=bool)
+            whole[kept] = gross_total[kept]
+        elif large_tracts == "carry_opa":
             whole[beyond] = gross_total[beyond]
         elif large_tracts == "opa_relevelled":
             if not opa_level or opa_level <= 0:

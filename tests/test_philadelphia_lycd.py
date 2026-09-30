@@ -17,6 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lvt.philadelphia import (  # noqa: E402
     HOMESTEAD_ORDERS,
     uncap_bare_land,
+    relevel_beyond_support,
+    large_lot_band_factor,
+    LARGE_TRACT_TREATMENTS,
     compute_lycd_land_values,
     carry_forward_exemptions,
     compute_residual_building_value,
@@ -793,8 +796,9 @@ def test_paint_surface_cap_binds_on_improved_only():
 # --- paint_land_surface with a published support edge ---------------------------------------
 # The surface says where its sales stop testing it (philly_open_avmkit's
 # land_surface_support.json). Beyond that edge a rate is an extrapolation: a filled parcel's
-# rate is re-sized to its own lot, and a vacant lot -- the one case nothing caps -- keeps OPA's
-# value (audit 2026-09-21, finding 3).
+# rate is re-sized to its own lot, and a vacant lot -- the one case nothing caps -- is carried at
+# OPA's value in the painted land (audit 2026-09-21, finding 3), with its rate kept so a reform step
+# can relevel it instead (relevel_beyond_support, below).
 SUPPORT = {"edge_sqft": 10_000.0, "size_elasticity": -0.5,
            "area_column": "painted_area_sqft", "flag_column": "beyond_support"}
 
@@ -872,8 +876,9 @@ def test_paint_surface_with_support_requires_the_surfaces_columns():
 
 
 def test_uncap_bare_land_carries_opa_on_a_bare_lot_beyond_the_support_edge():
-    """A bare lot the land sales cannot test keeps OPA's value; the other two readings of it are
-    the range. Within the edge, and with no edge published, nothing changes."""
+    """The carry_opa, opa_relevelled and surface readings of a bare lot the land sales cannot test:
+    the sensitivities beside the relevelled reading. Within the edge, and with no edge published,
+    nothing changes."""
     df = pd.DataFrame({
         #                  bare, beyond  bare, within  built, beyond
         "taxable_land":     [100_000.0, 100_000.0, 40_000.0],
@@ -902,6 +907,76 @@ def test_uncap_bare_land_carries_opa_on_a_bare_lot_beyond_the_support_edge():
     with pytest.raises(ValueError, match="large_tracts must be one of"):
         uncap_bare_land(alloc, df, pays, beyond_support=beyond, large_tracts="keep")
 
+
+
+def test_large_lot_band_factor_cuts_bands_as_philly_open_avmkit_does():
+    bands = {"edge to 1 acre": 1.1, "1 acre and over": 1.8}
+    f = large_lot_band_factor([9_999.0, 10_000.0, 10_001.0, 43_560.0, 43_561.0, np.nan], bands, 10_000.0)
+    assert np.isnan(f[:2]).all() and np.isnan(f[5])          # at or inside the edge, or unknown: no factor
+    assert list(f[2:5]) == [1.1, 1.1, 1.8]
+    with pytest.raises(KeyError, match="1 acre and over"):
+        large_lot_band_factor([20_000.0], {"edge to 1 acre": 1.1}, 10_000.0)
+
+
+def _large_lot_frame():
+    return pd.DataFrame({
+        #          built, beyond   bare, beyond    bare, within   built, beyond (use-restricted flag, ignored)
+        "taxable_land":     [40_000.0, 100_000.0, 50_000.0, 10_000.0],
+        "taxable_building": [160_000.0, 0.0, 0.0, 90_000.0],
+        "exempt_land":      [0.0, 0.0, 0.0, 0.0],
+        "exempt_building":  [0.0, 0.0, 0.0, 0.0],
+        "homestead_exemption": [0.0, 0.0, 0.0, 0.0],
+        "s5_land":          [200_000.0, 100_000.0, 80_000.0, 100_000.0],   # the export: capped, bare carried
+        "s5_uncarried":     [300_000.0, 360_000.0, 80_000.0, 150_000.0],   # rate x area, never capped
+    })
+
+
+def test_relevel_beyond_support_divides_the_uncapped_value_before_the_cap():
+    """The factor applies to the rate; the re-split caps afterwards. Dividing the capped value instead
+    would take parcel 0 to 200,000 / 1.2 = 166,667 though its relevelled land (250,000) still exceeds
+    its 200,000 total."""
+    df = _large_lot_frame()
+    beyond = np.array([True, True, False, True])
+    factor = np.array([1.2, 1.8, np.nan, 1.5])
+    r = relevel_beyond_support(df, land_col="s5_land", uncarried_col="s5_uncarried",
+                               beyond_support=beyond, relevel_factor=factor)
+    assert r.land.tolist() == [pytest.approx(250_000.0), pytest.approx(200_000.0), 80_000.0, pytest.approx(100_000.0)]
+    assert r.relevelled.tolist() == [True, True, False, True]
+    alloc = reallocate_land_within_total(df.assign(reform_land=r.land), new_land_col="reform_land", homestead_cap=0)
+    assert alloc.alloc_land[0] == pytest.approx(200_000.0)            # capped at the total, after the relevel
+    assert r.diagnostics["n_beyond_support"] == 3
+    assert r.diagnostics["parcels_by_factor"] == {1.2: 1, 1.5: 1, 1.8: 1}
+
+
+def test_relevel_beyond_support_refuses_a_flagged_parcel_without_a_factor():
+    df = _large_lot_frame()
+    with pytest.raises(ValueError, match="1 parcels beyond the support edge have no relevel factor"):
+        relevel_beyond_support(df, land_col="s5_land", uncarried_col="s5_uncarried",
+                               beyond_support=np.array([True, True, False, False]),
+                               relevel_factor=np.array([1.2, np.nan, np.nan, np.nan]))
+
+
+def test_uncap_bare_land_relevelled_takes_the_column_whole_except_use_restricted_tracts():
+    df = _large_lot_frame()
+    beyond = np.array([True, True, False, True])
+    r = relevel_beyond_support(df, land_col="s5_land", uncarried_col="s5_uncarried",
+                               beyond_support=beyond, relevel_factor=np.array([1.2, 1.8, np.nan, 1.5]))
+    df["reform_land"] = r.land
+    alloc = reallocate_land_within_total(df, new_land_col="reform_land", homestead_cap=0)
+    pays = np.ones(4, bool)
+    land, building, bare = uncap_bare_land(alloc, df, pays, "reform_land", beyond_support=beyond,
+                                           large_tracts="relevelled", keep_opa=np.zeros(4, bool))
+    assert list(bare) == [False, True, True, False]
+    assert land[1] == pytest.approx(200_000.0) and building[1] == 0.0   # 360,000 / 1.8, above OPA's 100,000
+    assert land[2] == pytest.approx(80_000.0)                            # within the edge: the surface whole
+    # a use-restricted bare tract keeps OPA's value; the flag on a built parcel changes nothing
+    kept, _, _ = uncap_bare_land(alloc, df, pays, "reform_land", beyond_support=beyond,
+                                 large_tracts="relevelled", keep_opa=np.array([False, True, False, True]))
+    assert kept[1] == pytest.approx(100_000.0)
+    assert kept[3] == land[3] and kept[0] == land[0]
+    with pytest.raises(ValueError, match="keep_opa"):
+        uncap_bare_land(alloc, df, pays, "reform_land", beyond_support=beyond, large_tracts="relevelled")
+    assert LARGE_TRACT_TREATMENTS[0] == "relevelled"
 
 def test_paint_surface_does_not_carry_a_vacant_coded_parcel_opa_values_as_a_building():
     """A vacant-coded lot beyond the edge that OPA books mostly to a building line (a parking lot
