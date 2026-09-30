@@ -342,6 +342,13 @@ the code in `lvt/philadelphia.py`.
   `opa_gross_land` (`opa_beyond_support`); improved parcels are left alone because the
   market-value cap already bounds them. `uncap_bare_land` applies the same rule to its wider
   definition of bare (no building value, whatever the category) through `beyond_support`.
+- **`relevel_beyond_support`** is the reform step's reading of those flagged parcels, built and
+  bare alike: the surface's own uncapped value divided by its held-out median ratio to price in
+  the lot's size band (`large_lot_band_factor`: edge to 1 acre, 1 acre and over), with the
+  re-split's cap applied afterwards, never before. `uncap_bare_land(large_tracts="relevelled")`
+  then takes that column whole on a bare lot, except the tracts `keep_opa` marks as
+  use-restricted, which keep OPA's value. The other `LARGE_TRACT_TREATMENTS` (carry OPA, OPA
+  relevelled, the surface whole) vary the bare side only and are the sensitivities.
 - **`condo_unit_areas`** fixes the condo defect in the table above on the painted path: each
   unit's area becomes the sibling repo's `condo_unit_share` (livable-area share, summing to 1
   per building; 0 for accessory units) times this repo's PIN area for the master lot. It imports
