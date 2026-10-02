@@ -367,9 +367,11 @@ the code in `lvt/philadelphia.py`.
 
 ## Against the draft ordinance
 
-`analysis/lycd_reassessment/philadelphia/paper/` is the PPI report that puts the two readings
-side by side and runs the ordinance's own § 3(b)/§ 4 tests on OPA's surface, the raw LYCD
-surface, and the re-split surface the ordinance would certify. The mechanism worth carrying
+The PPI report on the ordinance is in `philly_land_tax_research`, at
+`analysis/land_assessment/philadelphia/paper/`. It leads with the sales-based S5 surface; LYCD is
+its Appendix A, the simplest alternative, where it puts the two readings side by side and runs
+the ordinance's own § 3(b)/§ 4 tests on OPA's surface, the raw LYCD surface, and the re-split
+surface the ordinance would certify. The mechanism worth carrying
 here, not the numbers (the generator owns those): **neither surface satisfies § 3(b)'s
 uniformity sentence, and they fail different halves of it.** OPA's land is a deterministic
 function of the building (land = 0.20 × total ⇒ land = 0.25 × building, so within-zone rank
