@@ -389,16 +389,17 @@ certification moved to the *rate source*.
   method.pdf`) is image-only and was not machine-readable when this note was written; check
   whether it already specifies any of the Stage A refinements before implementing them.
 - No published artifact yet carries the land-share band the audit asked for (finding 6).
-- **The second analysis: a sales-based base rate in LYCD's schedule form** (requested
-  2026-09-05). Stage B above, built in `philly_open_avmkit` per the repo boundary and consumed
-  here as a per-parcel surface keyed on `parcel_number`. Once it exists,
-  `model_lycd_reassessment.ipynb` takes it as an alternative `new_land_col`, both readings and
-  the ordinance tests re-run, and the report gains a third surface column. The sales-implied
-  vacant multiplier the report derives (1 / LYCD's aggregate vacant ratio) is the first number
-  that analysis should reproduce.
 
 ## Resolved
 
+- **The second analysis: a sales-based land surface** (requested 2026-09-05 as a base rate in
+  LYCD's schedule form; built 2026-09-05 to 2026-09-12). Built in `philly_open_avmkit` and
+  consumed here through `paint_land_surface`; see "Stage B, first pass" and "Stage B, second
+  pass" above. The schedule form did not survive the held-out sales: the certified surface is
+  S5, paired-sales comparables, published with its comparables rather than as a rate table.
+  `model_lycd_reassessment.ipynb` runs it with `LVT_LAND_SURFACE=s5`, and the ordinance report
+  in `philly_land_tax_research` (`analysis/land_assessment/philadelphia/paper/`) now leads with
+  it, with the ordinance tests carrying sales-based columns beside OPA's and LYCD's.
 - **Land + building can exceed market_value; exemption-aware residual building fixes it**
   (built and verified 2026-09-05; wired into all three split-rate LYCD notebooks
   2026-09-06/07). See Stage A
