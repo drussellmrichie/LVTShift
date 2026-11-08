@@ -66,7 +66,36 @@ class TaxYear:
                 f"| homestead ${self.homestead_exemption:,}")
 
 
+# Rates: Phila. Code § 19-1301(2)(a) (City) and § 19-1801(3) (School District), as restated by Bill
+# No. 240180 (approved 2024-06-14) and amended by Bill No. 250201 (approved 2025-06-13): TY2016-2024
+# 0.6317% + 0.7681%; TY2025-2029 0.6159% + 0.7839%; TY2030 on 0.6089% + 0.7909%. Homestead: $45,000
+# for TY2020-2022 and $80,000 from TY2023 (phila.gov, "Real Estate Tax": "The exemption for tax year
+# 2020 through tax year 2022 was $45,000"); $100,000 from TY2025 (Bill No. 240492, approved
+# 2024-06-14). The assessment-history pulls' modal exempt total reproduces each amount
+# (build_philadelphia_abatement_classification.infer_homestead_amounts).
+_CODE_RATES = "Phila. Code § 19-1301(2)(a) (City) and § 19-1801(3) (School District), Bill No. 240180."
+
 _PARAMS: dict[int, TaxYear] = {
+    2022: TaxYear(
+        year=2022,
+        city_rate_pct=0.6317,
+        school_rate_pct=0.7681,
+        city_revenue_target=None,
+        target_kind="none",
+        source=_CODE_RATES + " Homestead $45,000: phila.gov Real Estate Tax page (TY2020-2022). "
+               "No revenue target recorded: used for historical bills, not for a revenue-neutral solve.",
+        homestead_exemption=45_000,
+    ),
+    2023: TaxYear(
+        year=2023,
+        city_rate_pct=0.6317,
+        school_rate_pct=0.7681,
+        city_revenue_target=None,
+        target_kind="none",
+        source=_CODE_RATES + " Homestead $80,000: phila.gov Real Estate Tax page ('2023 Real Estate "
+               "Tax bills and future years'). No revenue target recorded.",
+        homestead_exemption=80_000,
+    ),
     2024: TaxYear(
         year=2024,
         city_rate_pct=0.6317,
@@ -75,6 +104,16 @@ _PARAMS: dict[int, TaxYear] = {
         target_kind="actual",
         homestead_exemption=80_000,
         source="FY2024 city-only current-year Real Estate Tax collections.",
+    ),
+    2025: TaxYear(
+        year=2025,
+        city_rate_pct=0.6159,
+        school_rate_pct=0.7839,
+        city_revenue_target=None,
+        target_kind="none",
+        source=_CODE_RATES + " Bill No. 250201 (TY2025-2029 rates). Homestead $100,000: Bill No. "
+               "240492 (approved 2024-06-14), effective TY2025. No revenue target recorded.",
+        homestead_exemption=100_000,
     ),
     2026: TaxYear(
         year=2026,
